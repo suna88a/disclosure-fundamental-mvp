@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>開示詳細</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <a class="back-link" href="/disclosures">一覧へ戻る</a>
+      <p class="eyebrow">{{ category_label(disclosure.category) }}</p>
+      <h1>{{ company_display_name(disclosure.company) }}</h1>
+      <p class="subtle code-line">{{ disclosure.company.code }}</p>
+      <p class="subtle">{{ disclosure.title }}</p>
+    </header>
+
+    <section class="section-card">
+      <h2>開示基本情報</h2>
+      <dl class="detail-grid">
+        <div><dt>開示日時</dt><dd>{{ format_datetime(disclosure.disclosed_at) }}</dd></div>
+        <div><dt>仮優先度</dt><dd>{{ priority_label(disclosure.priority) }}</dd></div>
+        <div><dt>解析対象</dt><dd>{{ yes_no_label(disclosure.is_analysis_target) }}</dd></div>
+        <div><dt>元URL</dt><dd><a href="{{ disclosure.source_url }}">{{ disclosure.source_url }}</a></dd></div>
+      </dl>
+    </section>
+
+    <section class="section-card">
+      <h2>PDF取得状態</h2>
+      {% if disclosure.pdf_files %}
+        {% for pdf in disclosure.pdf_files %}
+        <div class="stack-block">
+          <p><strong>取得:</strong> {{ download_status_label(pdf.download_status) }}</p>
+          <p><strong>解析:</strong> {{ parse_status_label(pdf.parse_status) }}</p>
+          <p><strong>保存先:</strong> {{ format_text(pdf.file_path, "未取得") }}</p>
+          <p><strong>エラー:</strong> {{ format_text(pdf.download_error_message or pdf.parse_error_message, "該当なし") }}</p>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p>未取得</p>
+      {% endif %}
+    </section>
+
+    <section class="section-card">
+      <h2>主要数値</h2>
+      {% if disclosure.financial_reports %}
+        {% set report = disclosure.financial_reports[0] %}
+        <dl class="detail-grid">
+          <div><dt>期種別</dt><dd>{{ period_type_label(report.period_type) }}</dd></div>
+          <div><dt>連結/個別</dt><dd>{{ statement_scope_label(report.statement_scope) }}</dd></div>
+          <div><dt>累計/単独</dt><dd>{{ cumulative_type_label(report.cumulative_type) }}</dd></div>
+          <div><dt>売上高</dt><dd>{{ format_decimal(report.sales) }}</dd></div>
+          <div><dt>営業利益</dt><dd>{{ format_decimal(report.operating_income) }}</dd></div>
+          <div><dt>経常利益</dt><dd>{{ format_decimal(report.ordinary_income) }}</dd></div>
+          <div><dt>純利益</dt><dd>{{ format_decimal(report.net_income) }}</dd></div>
+          <div><dt>EPS</dt><dd>{{ format_decimal(report.eps, "円") }}</dd></div>
+          <div><dt>会社予想営業利益</dt><dd>{{ format_decimal(report.company_forecast_operating_income) }}</dd></div>
+          <div><dt>営業利益進捗率</dt><dd>{{ format_decimal(report.progress_rate_operating_income, "%") }}</dd></div>
+        </dl>
+      {% else %}
+        <p>未解析</p>
+      {% endif %}
+    </section>
+
+    <section class="section-card">
+      <h2>修正開示</h2>
+      {% if disclosure.guidance_revisions %}
+        {% set guidance = disclosure.guidance_revisions[0] %}
+        <div class="stack-block">
+          <p><strong>業績予想修正:</strong> {{ revision_direction_label(guidance.revision_direction) }}</p>
+          <p><strong>営業利益:</strong> {{ format_decimal(guidance.revised_operating_income_before) }} → {{ format_decimal(guidance.revised_operating_income_after) }}</p>
+          <p><strong>修正率:</strong> {{ format_decimal(guidance.revision_rate_operating_income, "%") }}</p>
+        </div>
+      {% else %}
+        <p>業績予想修正: 該当なし</p>
+      {% endif %}
+      {% if disclosure.dividend_revisions %}
+        {% set dividend = disclosure.dividend_revisions[0] %}
+        <div class="stack-block">
+          <p><strong>配当修正:</strong> {{ revision_direction_label(dividend.revision_direction) }}</p>
+          <p><strong>年間配当:</strong> {{ format_decimal(dividend.annual_dividend_before, "円") }} → {{ format_decimal(dividend.annual_dividend_after, "円") }}</p>
+        </div>
+      {% else %}
+        <p>配当修正: 該当なし</p>
+      {% endif %}
+    </section>
+
+    <section class="section-card">
+      <h2>解釈結果</h2>
+      {% if disclosure.analysis_results %}
+        {% set analysis = disclosure.analysis_results[0] %}
+        <div class="stack-block">
+          <p><strong>要約:</strong> {{ format_text(analysis.auto_summary) }}</p>
+          <p><strong>進捗判定:</strong> {{ format_text(analysis.progress_judgement) }}</p>
+          <p><strong>業績予想:</strong> {{ revision_detection_label(analysis.guidance_revision_status, "guidance") }}</p>
+          <p><strong>配当:</strong> {{ revision_detection_label(analysis.dividend_revision_status, "dividend") }}</p>
+          <p><strong>比較状態:</strong> 前年同期比 {{ comparison_label(analysis.yoy_comparison_status, analysis.yoy_comparison_error_reason) }} / 前四半期比 {{ comparison_label(analysis.qoq_comparison_status, analysis.qoq_comparison_error_reason) }}</p>
+          <p><strong>総合スコア:</strong> {{ format_score(analysis.overall_score) }}</p>
+          <p><strong>通知対象:</strong> {{ yes_no_label(analysis.should_notify) }}</p>
+          <p><strong>トーン:</strong> {{ tone_label(analysis.comment_tone) }}</p>
+        </div>
+      {% else %}
+        <p>未解析</p>
+      {% endif %}
+    </section>
+
+    <section class="section-card">
+      <h2>評価見直し仮説</h2>
+      {% if disclosure.valuation_views %}
+        {% set valuation = disclosure.valuation_views[0] %}
+        <div class="stack-block">
+          <p><strong>EPS訂正余地:</strong> {{ format_text(valuation.eps_revision_view) }}</p>
+          <p><strong>PER方向:</strong> {{ format_text(valuation.per_change_view) }}</p>
+          <p><strong>短期反応:</strong> {{ format_text(valuation.short_term_reaction_view) }}</p>
+          <p><strong>コメント:</strong> {{ format_text(valuation.valuation_comment) }}</p>
+        </div>
+      {% else %}
+        <p>未解析</p>
+      {% endif %}
+    </section>
+
+    <section class="section-card" id="notifications">
+      <h2>通知履歴</h2>
+      {% if disclosure.notifications %}
+        {% for notification in disclosure.notifications %}
+        <div class="stack-block">
+          <p><strong>状態:</strong> {{ notification_status_label(notification.status) }}</p>
+          <p><strong>送信先:</strong> {{ notification.destination }}</p>
+          <p><strong>本文:</strong> <span class="preserve-lines">{{ notification.body }}</span></p>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p>通知履歴はまだありません。</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

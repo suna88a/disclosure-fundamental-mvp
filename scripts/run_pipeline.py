@@ -1,0 +1,215 @@
+import argparse
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class PipelineStep:
+    name: str
+    command: list[str]
+    required: bool
+    description: str
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the disclosure-driven MVP pipeline sequentially.")
+    parser.add_argument(
+        "--python",
+        default=sys.executable,
+        help="Python executable used to invoke each job script.",
+    )
+    parser.add_argument(
+        "--disclosure-source",
+        default="dummy",
+        choices=["dummy"],
+        help="Disclosure fetch source backend.",
+    )
+    parser.add_argument(
+        "--disclosure-input",
+        default="data/samples/disclosures_sample.json",
+        help="Input file for the dummy disclosure fetcher.",
+    )
+    parser.add_argument(
+        "--pdf-source",
+        default="dummy",
+        choices=["dummy"],
+        help="PDF URL resolver backend.",
+    )
+    parser.add_argument(
+        "--pdf-manifest",
+        default="data/samples/pdf_links_sample.json",
+        help="Manifest file for the dummy PDF resolver.",
+    )
+    parser.add_argument(
+        "--pdf-storage-dir",
+        default="data/pdf",
+        help="Local directory for downloaded PDFs.",
+    )
+    parser.add_argument(
+        "--revision-source",
+        default="dummy",
+        choices=["dummy"],
+        help="Revision extraction backend.",
+    )
+    parser.add_argument(
+        "--revision-manifest",
+        default="data/samples/revision_extractions_sample.json",
+        help="Manifest file for the dummy revision extractor.",
+    )
+    parser.add_argument(
+        "--financial-source",
+        default="dummy",
+        choices=["dummy"],
+        help="Financial report parser backend.",
+    )
+    parser.add_argument(
+        "--financial-manifest",
+        default="data/samples/financial_reports_sample.json",
+        help="Manifest file for the dummy financial report parser.",
+    )
+    parser.add_argument(
+        "--skip-reclassify",
+        action="store_true",
+        help="Skip the reclassification step. Keep enabled when fetch already classifies titles.",
+    )
+    return parser.parse_args()
+
+
+def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
+    python_executable = args.python
+    return [
+        PipelineStep(
+            name="fetch_disclosures",
+            command=[
+                python_executable,
+                "-m",
+                "scripts.run_disclosure_fetch",
+                "--source",
+                args.disclosure_source,
+                "--input",
+                args.disclosure_input,
+            ],
+            required=True,
+            description="Fetch new disclosures and persist them with dedupe.",
+        ),
+        PipelineStep(
+            name="reclassify_disclosures",
+            command=[
+                python_executable,
+                "-m",
+                "scripts.reclassify_disclosures",
+            ],
+            required=False,
+            description="Re-apply title normalization and classification rules to existing disclosures.",
+        ),
+        PipelineStep(
+            name="download_pdfs",
+            command=[
+                python_executable,
+                "-m",
+                "scripts.run_pdf_download",
+                "--source",
+                args.pdf_source,
+                "--manifest",
+                args.pdf_manifest,
+                "--storage-dir",
+                args.pdf_storage_dir,
+            ],
+            required=False,
+            description="Resolve PDF URLs for analysis targets and download missing files.",
+        ),
+        PipelineStep(
+            name="extract_revisions",
+            command=[
+                python_executable,
+                "-m",
+                "scripts.run_revision_extraction",
+                "--source",
+                args.revision_source,
+                "--manifest",
+                args.revision_manifest,
+            ],
+            required=False,
+            description="Extract standalone guidance/dividend revisions and generate minimal analysis results.",
+        ),
+        PipelineStep(
+            name="extract_financial_reports",
+            command=[
+                python_executable,
+                "-m",
+                "scripts.run_financial_report_extraction",
+                "--source",
+                args.financial_source,
+                "--manifest",
+                args.financial_manifest,
+            ],
+            required=False,
+            description="Extract earnings-report metrics and company forecasts from supported PDFs.",
+        ),
+        PipelineStep(
+            name="run_financial_comparisons",
+            command=[python_executable, "-m", "scripts.run_financial_comparisons"],
+            required=False,
+            description="Compute progress rate and comparison-based interpretation inputs.",
+        ),
+        PipelineStep(
+            name="build_valuation_views",
+            command=[python_executable, "-m", "scripts.run_valuation_views"],
+            required=False,
+            description="Build conservative valuation-change hypotheses from analysis results.",
+        ),
+        PipelineStep(
+            name="dispatch_notifications",
+            command=[python_executable, "-m", "scripts.run_notifications"],
+            required=False,
+            description="Send non-duplicate notifications for should_notify disclosures.",
+        ),
+    ]
+
+
+def run_step(step: PipelineStep, workdir: Path) -> int:
+    completed = subprocess.run(step.command, cwd=workdir, check=False)
+    return completed.returncode
+
+
+def log(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}")
+
+
+def main() -> None:
+    args = parse_args()
+    workdir = Path(__file__).resolve().parents[1]
+    failures: list[tuple[str, int]] = []
+
+    steps = build_steps(args)
+    for step in steps:
+        if step.name == "reclassify_disclosures" and args.skip_reclassify:
+            log(f"[skip] {step.name}: skipped by option")
+            continue
+
+        log(f"[run] {step.name}: {step.description}")
+        exit_code = run_step(step, workdir)
+        if exit_code == 0:
+            log(f"[ok]  {step.name}")
+            continue
+
+        failures.append((step.name, exit_code))
+        if step.required:
+            log(f"[stop] {step.name} failed with exit code {exit_code}")
+            break
+        log(f"[warn] {step.name} failed with exit code {exit_code}; continuing")
+
+    if failures:
+        summary = ", ".join(f"{name}={code}" for name, code in failures)
+        log(f"Pipeline finished with failures: {summary}")
+        raise SystemExit(1)
+
+    log("Pipeline finished successfully.")
+
+
+if __name__ == "__main__":
+    main()

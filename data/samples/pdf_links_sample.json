@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "source_disclosure_id": "dummy-20260313-7203-001",
+      "pdf_url": "data/samples/pdfs/guidance_revision_sample.pdf"
+    },
+    {
+      "source_disclosure_id": "dummy-20260313-6758-001",
+      "pdf_url": "data/samples/pdfs/earnings_report_sample.pdf"
+    }
+  ]
+}

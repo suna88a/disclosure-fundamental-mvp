@@ -1,0 +1,19 @@
+[Unit]
+Description=Disclosure Fundamental MVP Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/disclosure-fundamental-mvp
+EnvironmentFile=/srv/disclosure-fundamental-mvp/.env
+ExecStart=/srv/disclosure-fundamental-mvp/scripts/start_web.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+StandardOutput=append:/srv/disclosure-fundamental-mvp/logs/web.log
+StandardError=append:/srv/disclosure-fundamental-mvp/logs/web-error.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ジョブ状況</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <a class="back-link" href="/disclosures">一覧へ戻る</a>
+      <p class="eyebrow">Job Monitor</p>
+      <h1>ジョブ状況</h1>
+      <p class="subtle">止まっていないか、失敗していないかをスマホから確認します。</p>
+    </header>
+
+    <section class="card-list">
+      {% for item in jobs %}
+      <article class="card">
+        <div class="card-meta">
+          <span class="chip {% if item.status_label == '失敗' %}chip-failed{% endif %}">{{ item.status_label }}</span>
+          <span>処理件数 {{ item.processed_count_label }}</span>
+        </div>
+        <h2>{{ item.job_name }}</h2>
+        <p class="summary">開始 {{ item.started_at_label }} / 終了 {{ item.finished_at_label }}</p>
+        {% if item.result_summary_label %}
+        <p class="summary">内訳 {{ item.result_summary_label }}</p>
+        {% endif %}
+        <p class="summary">最終成功 {{ item.last_success_at_label }}</p>
+        {% if item.error_message %}
+        <p class="summary error-text">{{ item.error_message }}</p>
+        {% endif %}
+      </article>
+      {% else %}
+      <article class="card empty">
+        <p>ジョブ履歴はまだありません。</p>
+      </article>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

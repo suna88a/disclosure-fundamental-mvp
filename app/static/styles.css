@@ -1,0 +1,154 @@
+:root {
+  --bg: #f6f1e8;
+  --card: #fffdf8;
+  --ink: #1c1a17;
+  --muted: #6a6258;
+  --line: #e5d9c8;
+  --accent: #9e4f2b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #fff8ec 0%, var(--bg) 55%);
+  color: var(--ink);
+  font-family: "Yu Gothic UI", "Hiragino Sans", sans-serif;
+}
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 20px 14px 40px;
+}
+
+.page-header {
+  margin-bottom: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1, h2 {
+  margin: 0 0 8px;
+  line-height: 1.2;
+}
+
+.subtle, .more, .back-link, dt {
+  color: var(--muted);
+}
+
+.card-list,
+.section-card {
+  display: grid;
+  gap: 12px;
+}
+
+.card-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card,
+.section-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 8px 24px rgba(60, 38, 20, 0.05);
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.chip {
+  background: #efe4d4;
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+.chip-priority {
+  background: #f6d7c4;
+}
+
+.chip-failed {
+  background: #f5c7c4;
+  color: #8a1d14;
+}
+
+.summary {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.code-line {
+  margin: -2px 0 10px;
+  font-size: 13px;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.detail-grid div {
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+dt {
+  font-size: 12px;
+}
+
+dd {
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+.stack-block {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.stack-block:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.stack-block p {
+  margin: 4px 0;
+  line-height: 1.5;
+}
+
+.preserve-lines {
+  white-space: pre-line;
+}
+
+.error-text {
+  color: #8a1d14;
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 10px;
+  text-decoration: none;
+}
+
+@media (min-width: 720px) {
+  .detail-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}

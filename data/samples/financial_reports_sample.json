@@ -1,0 +1,114 @@
+{
+  "items": [
+    {
+      "source_disclosure_id": "dummy-20260313-6758-001",
+      "pdf_source_url": "data/samples/pdfs/earnings_report_sample.pdf",
+      "format": "dummy.tabular_summary_v1",
+      "financial_report": {
+        "accounting_standard": "JGAAP",
+        "period_type": "3Q",
+        "statement_scope": "consolidated",
+        "cumulative_type": "cumulative",
+        "sales": 9800000,
+        "operating_income": 1150000,
+        "ordinary_income": 1180000,
+        "net_income": 820000,
+        "eps": 152.4,
+        "company_forecast_sales": 13200000,
+        "company_forecast_operating_income": 1550000,
+        "company_forecast_ordinary_income": 1580000,
+        "company_forecast_net_income": 1100000,
+        "company_forecast_eps": 204.8,
+        "extraction_confidence": 0.95,
+        "extraction_version": "v1"
+      }
+    },
+    {
+      "source_disclosure_id": "dummy-20260314-7203-001",
+      "pdf_source_url": "data/samples/pdfs/earnings_report_sample.pdf",
+      "format": "dummy.tabular_summary_v2",
+      "financial_report": {
+        "accounting_standard": "JGAAP",
+        "period": {
+          "type": "FY",
+          "scope": "consolidated",
+          "cumulative_type": "cumulative"
+        },
+        "actual": {
+          "sales": 45120000,
+          "operating_income": 5120000,
+          "ordinary_income": 5300000,
+          "net_income": 3660000,
+          "eps": 278.4
+        },
+        "forecast": {
+          "sales": 46800000,
+          "operating_income": 5400000,
+          "ordinary_income": 5580000,
+          "net_income": 3880000,
+          "eps": 295.1
+        },
+        "extraction_confidence": 0.92,
+        "extraction_version": "v2"
+      }
+    },
+    {
+      "source_disclosure_id": "dummy-20260315-8306-001",
+      "pdf_source_url": "data/samples/pdfs/earnings_report_sample.pdf",
+      "format": "dummy.tabular_summary_v3",
+      "financial_report": {
+        "header": {
+          "period_type": "2Q",
+          "statement_scope": "consolidated",
+          "cumulative_type": "cumulative",
+          "accounting_standard": "JGAAP"
+        },
+        "actual_results": {
+          "revenue": 32450000,
+          "op_income": 6840000,
+          "recurring_income": 7010000,
+          "profit_attributable_to_owners": 4890000,
+          "eps": 142.6
+        },
+        "company_forecast": {
+          "revenue": 64800000,
+          "op_income": 13200000,
+          "recurring_income": 13650000,
+          "profit_attributable_to_owners": 9550000,
+          "eps": 279.3
+        },
+        "extraction_confidence": 0.9,
+        "extraction_version": "v3"
+      }
+    },
+    {
+      "source_disclosure_id": "dummy-20260315-8411-001",
+      "pdf_source_url": "data/samples/pdfs/earnings_report_sample.pdf",
+      "format": "dummy.tabular_summary_v4",
+      "financial_report": {
+        "meta": {
+          "period": "1Q",
+          "scope_type": "consolidated",
+          "aggregation": "quarterly_only",
+          "gaap": "JGAAP"
+        },
+        "results": {
+          "net_sales": 1885000,
+          "business_profit": 214000,
+          "ordinary_profit": 228000,
+          "profit": 157000,
+          "eps_value": 48.2
+        },
+        "outlook": {
+          "net_sales": 7920000,
+          "business_profit": 910000,
+          "ordinary_profit": 940000,
+          "profit": 650000,
+          "eps_value": 199.4
+        },
+        "extraction_confidence": 0.88,
+        "extraction_version": "v4"
+      }
+    }
+  ]
+}

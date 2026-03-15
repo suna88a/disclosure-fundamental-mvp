@@ -1,0 +1,33 @@
+{
+  "items": [
+    {
+      "source_disclosure_id": "dummy-20260313-7203-001",
+      "guidance_revision": {
+        "revised_sales_before": 45000000,
+        "revised_sales_after": 46000000,
+        "revised_operating_income_before": 4200000,
+        "revised_operating_income_after": 4700000,
+        "revised_ordinary_income_before": 4300000,
+        "revised_ordinary_income_after": 4750000,
+        "revised_net_income_before": 3000000,
+        "revised_net_income_after": 3300000,
+        "revised_eps_before": 220.5,
+        "revised_eps_after": 242.3,
+        "revision_rate_operating_income": 11.9,
+        "revision_direction": "up"
+      }
+    },
+    {
+      "title": "Notice of Dividend Forecast Revision",
+      "dividend_revision": {
+        "interim_dividend_before": 60,
+        "interim_dividend_after": 60,
+        "year_end_dividend_before": 60,
+        "year_end_dividend_after": 70,
+        "annual_dividend_before": 120,
+        "annual_dividend_after": 130,
+        "revision_direction": "up"
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>通知履歴</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <a class="back-link" href="/disclosures">一覧へ戻る</a>
+      <p class="eyebrow">Notifications</p>
+      <h1>通知履歴</h1>
+      <p class="subtle">送信結果を後から追えるようにした簡易ビューです。</p>
+    </header>
+
+    <section class="card-list">
+      {% for item in notifications %}
+      <a class="card-link" href="{{ item.detail_url }}">
+        <article class="card">
+          <div class="card-meta">
+            <span>{{ item.sent_at_label }}</span>
+            <span class="chip">{{ item.category_label }}</span>
+            <span class="chip {% if item.status_label == '失敗' %}chip-failed{% endif %}">{{ item.status_label }}</span>
+          </div>
+          <h2>{{ item.company_code }} {{ item.company_name }}</h2>
+          <p class="summary">{{ item.summary }}</p>
+          <p class="more">対象開示へ</p>
+        </article>
+      </a>
+      {% else %}
+      <article class="card empty">
+        <p>通知履歴はまだありません。</p>
+      </article>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

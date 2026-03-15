@@ -1,0 +1,17 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+
+data/app.db
+data/backups/
+data/pdf/
+data/test_tmp/
+
+logs/
+tmp*/
+pytest-cache-files-*/
+
+data/test_issue_*.db
+data/maintenance_test_*/

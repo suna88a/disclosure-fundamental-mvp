@@ -1,0 +1,63 @@
+{
+  "version": "v1",
+  "categories": {
+    "earnings_report": {
+      "priority": "critical",
+      "is_analysis_target": true,
+      "keywords_any": [
+        "決算短信",
+        "financial results",
+        "summary of consolidated financial results",
+        "summary of non-consolidated financial results",
+        "earnings report"
+      ]
+    },
+    "guidance_revision": {
+      "priority": "high",
+      "is_analysis_target": true,
+      "keywords_any": [
+        "業績予想の修正",
+        "業績予想修正",
+        "通期業績予想の修正",
+        "financial forecast revision",
+        "revision of financial forecasts",
+        "earnings forecast revision"
+      ]
+    },
+    "dividend_revision": {
+      "priority": "high",
+      "is_analysis_target": true,
+      "keywords_any": [
+        "配当予想の修正",
+        "配当修正",
+        "dividend forecast revision",
+        "revision of dividend forecast",
+        "dividend revision"
+      ]
+    },
+    "share_buyback": {
+      "priority": "high",
+      "is_analysis_target": true,
+      "keywords_any": [
+        "自己株式取得",
+        "自己株式の取得",
+        "share buyback",
+        "repurchase of own shares",
+        "repurchase of treasury shares",
+        "acquisition of treasury stock"
+      ]
+    },
+    "other": {
+      "priority": "low",
+      "is_analysis_target": false,
+      "keywords_any": [
+        "corporate governance",
+        "governance report",
+        "monthly sales",
+        "月次",
+        "notice",
+        "announcement"
+      ]
+    }
+  }
+}

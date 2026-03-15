@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>新着開示一覧</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <p class="eyebrow">Disclosure Monitor</p>
+      <h1>新着開示一覧</h1>
+      <p class="subtle">通知からそのまま確認しやすい、スマホ向けの軽量一覧です。</p>
+    </header>
+
+    <section class="card-list">
+      {% for item in disclosures %}
+      <a class="card-link" href="/disclosures/{{ item.disclosure_id }}">
+        <article class="card">
+          <div class="card-meta">
+            <span>{{ item.disclosed_at_label }}</span>
+            <span class="chip">{{ item.category_label }}</span>
+            <span class="chip chip-priority">{{ item.priority_label }}</span>
+          </div>
+          <h2>{{ item.company_name }}</h2>
+          <p class="subtle code-line">{{ item.company_code }}</p>
+          <p class="summary">{{ item.summary }}</p>
+          <p class="more">詳細を見る</p>
+        </article>
+      </a>
+      {% else %}
+      <article class="card empty">
+        <p>開示データがまだありません。</p>
+      </article>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

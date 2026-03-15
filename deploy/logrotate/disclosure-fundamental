@@ -1,0 +1,16 @@
+/srv/disclosure-fundamental-mvp/logs/web.log
+/srv/disclosure-fundamental-mvp/logs/web-error.log
+/srv/disclosure-fundamental-mvp/logs/pipeline.log
+/srv/disclosure-fundamental-mvp/logs/nginx-access.log
+/srv/disclosure-fundamental-mvp/logs/nginx-error.log
+{
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    copytruncate
+    su www-data www-data
+}

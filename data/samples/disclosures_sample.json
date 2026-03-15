@@ -1,0 +1,28 @@
+[
+  {
+    "company_code": "7203",
+    "source_name": "dummy",
+    "source_disclosure_id": "dummy-20260313-7203-001",
+    "disclosed_at": "2026-03-13T15:30:00+09:00",
+    "title": "Notice Regarding Revision of Financial Forecasts",
+    "normalized_title": "notice regarding revision of financial forecasts",
+    "source_url": "https://example.com/disclosures/7203-001"
+  },
+  {
+    "company_code": "6758",
+    "source_name": "dummy",
+    "source_disclosure_id": "dummy-20260313-6758-001",
+    "disclosed_at": "2026-03-13T15:00:00+09:00",
+    "title": "Summary of Consolidated Financial Results for the Third Quarter",
+    "normalized_title": "summary of consolidated financial results for the third quarter",
+    "source_url": "https://example.com/disclosures/6758-001"
+  },
+  {
+    "company_code": "9432",
+    "source_name": "dummy",
+    "disclosed_at": "2026-03-13T16:00:00+09:00",
+    "title": "Notice of Dividend Forecast Revision",
+    "normalized_title": "notice of dividend forecast revision",
+    "source_url": "https://example.com/disclosures/9432-001"
+  }
+]
