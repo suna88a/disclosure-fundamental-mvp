@@ -8,16 +8,20 @@ from app.models.analysis_result import AnalysisResult
 from app.models.company import Company
 from app.models.disclosure import Disclosure
 from app.models.enums import NotificationChannel, NotificationType
-from app.models.valuation_view import ValuationView
 from app.repositories.notification_repository import NotificationRepository
 from app.services.notification_message_builder import build_dedupe_key, build_notification_body
-from app.services.notifiers import DummyNotifier, TelegramNotifier
+from app.services.notifiers import DiscordNotifier, DummyNotifier, TelegramNotifier
+
 
 
 def dispatch_notifications(session: Session) -> dict[str, int]:
     settings = get_settings()
     channel = NotificationChannel(settings.notification_channel)
-    destination = _resolve_destination(channel, settings.notification_destination, settings.telegram_chat_id)
+    destination = _resolve_destination(
+        channel,
+        settings.notification_destination,
+        settings.telegram_chat_id,
+    )
     notifier = _build_notifier(channel)
     repository = NotificationRepository(session)
 
@@ -83,12 +87,16 @@ def dispatch_notifications(session: Session) -> dict[str, int]:
     return {"processed": processed, "sent": sent, "skipped": skipped, "failed": failed}
 
 
+
 def _build_notifier(channel: NotificationChannel):
     if channel == NotificationChannel.DUMMY:
         return DummyNotifier()
     if channel == NotificationChannel.TELEGRAM:
         return TelegramNotifier()
+    if channel == NotificationChannel.DISCORD:
+        return DiscordNotifier()
     raise ValueError(f"Unsupported notification channel: {channel}")
+
 
 
 def _resolve_destination(
@@ -98,4 +106,6 @@ def _resolve_destination(
 ) -> str:
     if channel == NotificationChannel.TELEGRAM:
         return telegram_chat_id or configured_destination
+    if channel == NotificationChannel.DISCORD:
+        return configured_destination or "discord-webhook"
     return configured_destination

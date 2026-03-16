@@ -20,6 +20,7 @@ from app.models.enums import (
 from app.models.notification import Notification
 from app.models.valuation_view import ValuationView
 from app.services.notification_dispatch import dispatch_notifications
+from app.services.notifiers import NotificationSendResult
 
 
 def _build_session() -> Session:
@@ -80,6 +81,7 @@ def test_dispatch_notifications_sends_once_and_persists_log(monkeypatch) -> None
     assert notifications[0].status == NotificationStatus.SENT
 
 
+
 def test_dispatch_notifications_skips_inactive_company(monkeypatch) -> None:
     monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
     monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
@@ -121,3 +123,84 @@ def test_dispatch_notifications_skips_inactive_company(monkeypatch) -> None:
 
     assert result["processed"] == 0
     assert session.scalar(select(Notification)) is None
+
+
+
+def test_dispatch_notifications_uses_discord_channel(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "discord")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "discord-room")
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    get_settings.cache_clear()
+
+    sent_payloads: list[tuple[str, str]] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_payloads.append((destination, body))
+        return NotificationSendResult(external_message_id="discord-message-1")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DiscordNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="9432", name="NTT", name_ja="日本電信電話")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="Summary of Consolidated Financial Results",
+        category=DisclosureCategory.EARNINGS_REPORT,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    analysis = AnalysisResult(
+        disclosure_id=disclosure.id,
+        auto_summary="進捗率80% / 業績予想上方修正",
+        overall_score=Decimal("3.0"),
+        should_notify=True,
+        guidance_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+        dividend_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+        yoy_comparison_status=ComparisonStatus.OK,
+        yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+    )
+    valuation = ValuationView(
+        disclosure_id=disclosure.id,
+        eps_revision_view="EPSの上振れ余地が意識されやすい。",
+        short_term_reaction_view="短期反応はポジティブ寄りを想定。",
+        valuation_comment="仮説コメント",
+    )
+    session.add_all([analysis, valuation])
+    session.commit()
+
+    result = dispatch_notifications(session)
+    notification = session.scalar(select(Notification))
+
+    assert result["sent"] == 1
+    assert sent_payloads
+    assert sent_payloads[0][0] == "discord-room"
+    assert notification is not None
+    assert notification.status == NotificationStatus.SENT
+    assert notification.channel.value == "discord"
+
+
+
+def test_dispatch_notifications_requires_discord_webhook_url(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "discord")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "discord-room")
+    monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    get_settings.cache_clear()
+
+    session = _build_session()
+
+    try:
+        dispatch_notifications(session)
+    except ValueError as exc:
+        assert "DISCORD_WEBHOOK_URL" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when DISCORD_WEBHOOK_URL is missing.")

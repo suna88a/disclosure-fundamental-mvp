@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from urllib import request
 
+import requests
+
 from app.config import get_settings
 
 
@@ -39,3 +41,21 @@ class TelegramNotifier:
             raise ValueError(f"Telegram API returned error: {parsed}")
         result = parsed.get("result", {})
         return NotificationSendResult(external_message_id=str(result.get("message_id")))
+
+
+class DiscordNotifier:
+    def __init__(self) -> None:
+        settings = get_settings()
+        if not settings.discord_webhook_url:
+            raise ValueError("DISCORD_WEBHOOK_URL is required for discord notifications.")
+        self.webhook_url = settings.discord_webhook_url
+
+    def send(self, destination: str, body: str) -> NotificationSendResult:
+        response = requests.post(
+            self.webhook_url,
+            json={"content": body},
+            timeout=30,
+        )
+        response.raise_for_status()
+        message_id = response.headers.get("X-Discord-Message-Id") or None
+        return NotificationSendResult(external_message_id=message_id)

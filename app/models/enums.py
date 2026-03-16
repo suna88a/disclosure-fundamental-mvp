@@ -130,6 +130,7 @@ class NotificationStatus(StrEnum):
 
 class NotificationChannel(StrEnum):
     TELEGRAM = "telegram"
+    DISCORD = "discord"
     DUMMY = "dummy"
 
 

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     notification_destination: str = "dummy-channel"
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    discord_webhook_url: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

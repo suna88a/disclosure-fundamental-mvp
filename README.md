@@ -783,6 +783,105 @@ For personal daily operation, keep this checklist short:
 4. If something looks stale, rerun `python -m scripts.run_pipeline`.
 5. If one step keeps failing, inspect that job's error message first before touching the DB.
 
+## Daily Operations
+
+Use this fixed order every day:
+
+1. Open `/jobs`.
+   - Confirm `fetch_disclosures` succeeded recently.
+   - Confirm `run_pdf_download`, `run_financial_report_extraction`, `run_financial_comparisons`, and `run_notifications` are not failing repeatedly.
+2. Open `/notifications`.
+   - Confirm new alerts are appearing when expected.
+   - Confirm there are no obvious duplicate sends or broken message bodies.
+3. Open `/disclosures`.
+   - Confirm new disclosures are flowing in.
+   - Spot-check that category labels look reasonable.
+4. Run the failure summary.
+
+```powershell
+python -m scripts.report_failure_summary
+```
+
+5. If `unsupported_format` is high, inspect samples directly.
+
+```powershell
+python -m scripts.report_pdf_failure_samples --code unsupported_format --limit 10
+```
+
+If anything looks stale and you are not sure where it failed, rerun:
+
+```powershell
+python -m scripts.run_pipeline
+```
+
+## Weekly Operations
+
+Use this once or twice per week:
+
+1. Create a SQLite backup.
+
+```powershell
+python -m scripts.backup_sqlite
+```
+
+2. Check PDF storage usage.
+
+```powershell
+python -m scripts.manage_pdf_storage
+```
+
+3. If orphan PDFs have accumulated, clean them after review.
+
+```powershell
+python -m scripts.manage_pdf_storage --delete-orphans --older-than-days 7
+```
+
+4. Review the failure summary trend.
+   - Is `unsupported_format` still the top parse issue?
+   - Are `scope_mismatch` or `cumulative_mismatch` increasing?
+   - Are notifications becoming noisy or too quiet?
+
+## How To Read Failure Summary
+
+Use the report to decide what to fix next, not to inspect every single failure.
+
+- `parse_error_code`
+  - Start with the most frequent code.
+  - If `unsupported_format` is dominant, inspect samples before adding parser coverage.
+  - If `period_detection_failed`, `scope_detection_failed`, or `cumulative_type_detection_failed` are dominant, improve extraction logic before expanding formats.
+- `comparison_error_reason`
+  - `insufficient_history` is often expected for newer coverage.
+  - `q1_qoq_not_applicable` is usually normal and should not be treated as a bug.
+  - `scope_mismatch`, `cumulative_mismatch`, and `extraction_confidence_low` are better improvement targets.
+
+Recommended priority:
+
+1. Failures that stop upstream flow (`fetch_disclosures`, PDF download, notification dispatch)
+2. The most frequent `parse_error_code`
+3. The most frequent actionable `comparison_error_reason`
+4. Only then UI wording or additional analysis features
+
+## First 3 To 7 Days Of Real Operation
+
+During the first 3 to 7 days, focus on trend and concentration, not polish.
+
+Check these points every day:
+
+1. Are new disclosures entering the system consistently?
+2. Are PDF downloads mostly succeeding?
+3. Is one `parse_error_code` clearly dominating?
+4. Is one `comparison_error_reason` clearly dominating?
+5. Are should-notify cases missing, or are duplicate notifications happening?
+6. Are unsupported samples clustering around one common pattern?
+
+Do not add broad new features during this period.
+
+Use this rule:
+
+- If one failure code is clearly the largest bucket, fix that bucket first.
+- If failure volume is low and scattered, keep observing before changing parser logic.
+- If notifications are wrong, fix correctness before improving message style.
+
 ## SQLite Backup
 
 Keep backup simple. For a small VPS MVP, a file-level SQLite backup is enough if you do it regularly.
