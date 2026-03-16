@@ -17,8 +17,9 @@ from urllib3.util.retry import Retry
 
 
 JST = ZoneInfo("Asia/Tokyo")
-COMPANY_CODE_PATTERN = re.compile(r"\b\d{4,6}\b")
+COMPANY_CODE_PATTERN = re.compile(r"\b\d{4,6}[A-Z]?\d?\b")
 TIME_PATTERN = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b")
+PAGER_LINK_PATTERN = re.compile(r"pagerLink\('([^']+)'\)")
 DEFAULT_USER_AGENT = "disclosure-fundamental-mvp/1.0 (+https://www.jpx.co.jp/)"
 logger = logging.getLogger(__name__)
 
@@ -171,11 +172,12 @@ class HttpJsonDisclosureFetcher:
 
 
 class JpxTdnetDisclosureFetcher:
-    """Fetch disclosures from JPX Company Announcements Disclosure Service pages.
+    """Fetch disclosures from JPX TDnet daily list pages.
 
-    The provider is fixed to JPX, while the actual list URL is supplied as a format
-    template because the public JPX UI is JavaScript-driven. The template must accept
-    `{date}` in YYYY-MM-DD format.
+    The production URL pattern is page-based rather than query-based. The fetcher accepts
+    a template that can use `{date}` (YYYY-MM-DD), `{date_yyyymmdd}` (YYYYMMDD), and
+    optionally `{page}`. When `{page}` is omitted, page 1 is assumed and subsequent pages
+    are discovered from pager links in the HTML.
     """
 
     def __init__(
@@ -218,27 +220,23 @@ class JpxTdnetDisclosureFetcher:
         )
 
         for target in dates:
-            url = self.url_template.format(date=target.isoformat())
-            response = self.session.get(url, timeout=self.timeout)
-            response.raise_for_status()
-            day_records, day_diagnostics = self._parse_html(response.text, base_url=url, target_date=target)
-            diagnostics.append(day_diagnostics)
-
-            logger.info(
-                "JPX fetch date=%s status=%s tables=%s rows=%s data_rows=%s extracted=%s url=%s",
-                target.isoformat(),
-                day_diagnostics.status,
-                day_diagnostics.table_count,
-                day_diagnostics.row_count,
-                day_diagnostics.data_row_count,
-                day_diagnostics.extracted_count,
-                url,
-            )
-
-            if day_diagnostics.status == "structure_anomaly_zero":
-                raise ValueError(
-                    f"JPX disclosure HTML structure anomaly for {target.isoformat()}: {day_diagnostics.reason}"
+            day_records, day_diagnostics = self._fetch_single_date(target)
+            diagnostics.extend(day_diagnostics)
+            for diagnostic in day_diagnostics:
+                logger.info(
+                    "JPX fetch date=%s status=%s tables=%s rows=%s data_rows=%s extracted=%s url=%s",
+                    target.isoformat(),
+                    diagnostic.status,
+                    diagnostic.table_count,
+                    diagnostic.row_count,
+                    diagnostic.data_row_count,
+                    diagnostic.extracted_count,
+                    diagnostic.url,
                 )
+                if diagnostic.status == "structure_anomaly_zero":
+                    raise ValueError(
+                        f"JPX disclosure HTML structure anomaly for {target.isoformat()}: {diagnostic.reason}"
+                    )
 
             for record in day_records:
                 dedupe_id = record.source_disclosure_id or f"{record.company_code}:{record.disclosed_at.isoformat()}:{record.title}"
@@ -250,6 +248,40 @@ class JpxTdnetDisclosureFetcher:
         self.last_diagnostics = diagnostics
         logger.info("JPX fetch completed total_records=%s", len(records))
         return records
+
+    def _fetch_single_date(self, target_date: date) -> tuple[list[DisclosureRecord], list[HtmlStructureDiagnostics]]:
+        queue = [self._build_list_url(target_date, page=1)]
+        seen_pages: set[str] = set()
+        day_records: list[DisclosureRecord] = []
+        diagnostics: list[HtmlStructureDiagnostics] = []
+        seen_ids: set[str] = set()
+
+        while queue:
+            url = queue.pop(0)
+            if url in seen_pages:
+                continue
+            seen_pages.add(url)
+
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
+            page_records, page_diagnostics, next_pages = self._parse_html(
+                response.text,
+                base_url=url,
+                target_date=target_date,
+            )
+            diagnostics.append(page_diagnostics)
+            for next_page in next_pages:
+                if next_page not in seen_pages and next_page not in queue:
+                    queue.append(next_page)
+
+            for record in page_records:
+                dedupe_id = record.source_disclosure_id or f"{record.company_code}:{record.disclosed_at.isoformat()}:{record.title}"
+                if dedupe_id in seen_ids:
+                    continue
+                seen_ids.add(dedupe_id)
+                day_records.append(record)
+
+        return day_records, diagnostics
 
     def _configure_session(self, session: requests.Session) -> None:
         retry = Retry(
@@ -284,16 +316,33 @@ class JpxTdnetDisclosureFetcher:
             return dates
         return [datetime.now(JST).date()]
 
-    def _parse_html(self, html: str, *, base_url: str, target_date: date) -> tuple[list[DisclosureRecord], HtmlStructureDiagnostics]:
+    def _build_list_url(self, target_date: date, *, page: int) -> str:
+        if page < 1:
+            raise ValueError("page must be >= 1")
+        page_fragment = f"{page:03d}"
+        return self.url_template.format(
+            date=target_date.isoformat(),
+            date_yyyymmdd=target_date.strftime("%Y%m%d"),
+            page=page_fragment,
+        )
+
+    def _parse_html(
+        self,
+        html: str,
+        *,
+        base_url: str,
+        target_date: date,
+    ) -> tuple[list[DisclosureRecord], HtmlStructureDiagnostics, list[str]]:
         soup = BeautifulSoup(html, "html.parser")
+        main_table = soup.select_one("#main-list-table")
         tables = soup.select("table")
-        rows = soup.select("table tr")
+        rows = main_table.select("tr") if main_table else []
         records: list[DisclosureRecord] = []
         data_row_count = 0
 
         for row in rows:
             tds = row.find_all("td")
-            if len(tds) < 3:
+            if len(tds) < 4:
                 continue
             data_row_count += 1
             texts = [self._clean_text(cell.get_text(" ", strip=True)) for cell in tds]
@@ -305,7 +354,8 @@ class JpxTdnetDisclosureFetcher:
                 continue
             disclosed_at = self._extract_disclosed_at(texts, target_date)
             company_name = texts[code_index + 1] if code_index + 1 < len(texts) else None
-            anchor = row.find("a", href=True)
+            title_cell = row.select_one("td.kjTitle") or row.find_all("td")[3]
+            anchor = title_cell.find("a", href=True) if title_cell else row.find("a", href=True)
             source_url = urljoin(base_url, anchor["href"]) if anchor else base_url
             title = self._extract_title(texts, code_index, company_name, anchor)
             if not title:
@@ -330,8 +380,23 @@ class JpxTdnetDisclosureFetcher:
             row_count=len(rows),
             data_row_count=data_row_count,
             extracted_count=len(records),
+            main_table_found=main_table is not None,
         )
-        return records, diagnostics
+        next_pages = self._extract_pager_links(soup, base_url)
+        return records, diagnostics, next_pages
+
+    @staticmethod
+    def _extract_pager_links(soup: BeautifulSoup, base_url: str) -> list[str]:
+        urls: list[str] = []
+        seen: set[str] = set()
+        for node in soup.select("[onclick]"):
+            onclick = node.get("onclick", "")
+            for match in PAGER_LINK_PATTERN.findall(onclick):
+                absolute = urljoin(base_url, match)
+                if absolute not in seen:
+                    seen.add(absolute)
+                    urls.append(absolute)
+        return urls
 
     @staticmethod
     def _build_diagnostics(
@@ -342,8 +407,9 @@ class JpxTdnetDisclosureFetcher:
         row_count: int,
         data_row_count: int,
         extracted_count: int,
+        main_table_found: bool,
     ) -> HtmlStructureDiagnostics:
-        if table_count == 0:
+        if not main_table_found:
             return HtmlStructureDiagnostics(
                 target_date=target_date,
                 url=url,
@@ -352,7 +418,7 @@ class JpxTdnetDisclosureFetcher:
                 data_row_count=data_row_count,
                 extracted_count=extracted_count,
                 status="structure_anomaly_zero",
-                reason="no_table_found",
+                reason="main_list_table_not_found",
             )
         if data_row_count == 0:
             return HtmlStructureDiagnostics(

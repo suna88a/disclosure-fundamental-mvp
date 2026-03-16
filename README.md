@@ -1032,13 +1032,14 @@ Implementation choice:
 
 - provider is fixed to JPX TDnet
 - the actual list URL is supplied as a template because the public JPX UI is JavaScript-driven
-- the template must accept `{date}` in `YYYY-MM-DD` format
+- the template should use the real TDnet daily list pattern `I_list_001_{date_yyyymmdd}.html`
+- supported placeholders are `{date}` (YYYY-MM-DD), `{date_yyyymmdd}` (YYYYMMDD), and optional `{page}`
 - the fetcher is designed for full-market ingestion first, then downstream active/analysis filtering
 
 Recommended environment variable:
 
 ```env
-JPX_DISCLOSURE_URL_TEMPLATE=https://example.com/jpx/disclosures?date={date}
+JPX_DISCLOSURE_URL_TEMPLATE=https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html
 ```
 
 CLI examples:
@@ -1046,31 +1047,31 @@ CLI examples:
 Fetch today in JST:
 
 ```powershell
-python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://example.com/jpx/disclosures?date={date}"
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html"
 ```
 
 Fetch one day explicitly:
 
 ```powershell
-python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://example.com/jpx/disclosures?date={date}" --date 2026-03-16
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html" --date 2026-03-16
 ```
 
 Fetch a date range:
 
 ```powershell
-python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://example.com/jpx/disclosures?date={date}" --date-from 2026-03-14 --date-to 2026-03-16
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html" --date-from 2026-03-14 --date-to 2026-03-16
 ```
 
 Pipeline example with JPX TDnet source:
 
 ```powershell
-python -m scripts.run_pipeline --disclosure-source jpx-tdnet --disclosure-url-template "https://example.com/jpx/disclosures?date={date}"
+python -m scripts.run_pipeline --disclosure-source jpx-tdnet --disclosure-url-template "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html"
 ```
 
 15-minute cron example:
 
 ```cron
-*/15 * * * * cd /srv/disclosure-fundamental-mvp && JPX_DISCLOSURE_URL_TEMPLATE="https://example.com/jpx/disclosures?date={date}" /srv/disclosure-fundamental-mvp/.venv/bin/python -m scripts.run_pipeline >> /srv/disclosure-fundamental-mvp/logs/pipeline.log 2>&1
+*/15 * * * * cd /srv/disclosure-fundamental-mvp && JPX_DISCLOSURE_URL_TEMPLATE="https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html" /srv/disclosure-fundamental-mvp/.venv/bin/python -m scripts.run_pipeline >> /srv/disclosure-fundamental-mvp/logs/pipeline.log 2>&1
 ```
 
 Re-fetch procedure:
@@ -1085,7 +1086,7 @@ Re-fetch procedure:
 Recommended real-source production settings:
 
 ```env
-JPX_DISCLOSURE_URL_TEMPLATE=https://www.jpx.co.jp/path/to/disclosure-list?date={date}
+JPX_DISCLOSURE_URL_TEMPLATE=https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html
 ```
 
 The production fetcher behavior is now explicit:
@@ -1103,13 +1104,12 @@ The production fetcher behavior is now explicit:
 
 Expected HTML structure:
 
-- at least one `<table>` exists
-- disclosure rows are represented by `<tr>` with at least 3 `<td>` cells
-- a row should contain:
-  - time text such as `15:00`
-  - company code
-  - company name
-  - title, usually through an `<a href="...">` element
+- landing page: `https://www.release.tdnet.info/inbs/I_main_00.html`
+- daily list pages: `https://www.release.tdnet.info/inbs/I_list_001_YYYYMMDD.html`
+- additional pages are linked from pager controls such as `pagerLink('I_list_002_YYYYMMDD.html')`
+- disclosure rows live under `table#main-list-table`
+- expected row cells are: time / code / company / title / xbrl / market / history
+- title is typically inside `td.kjTitle a[href]` and relative PDF links like `140120260316582566.pdf`
 
 Normal zero means:
 
@@ -1126,19 +1126,19 @@ Smoke fetch commands:
 One-day smoke fetch:
 
 ```powershell
-python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.jpx.co.jp/path/to/disclosure-list?date={date}" --date 2026-03-16 --timeout 30 --retry-count 2
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html" --date 2026-03-16 --timeout 30 --retry-count 2
 ```
 
 Range smoke fetch:
 
 ```powershell
-python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.jpx.co.jp/path/to/disclosure-list?date={date}" --date-from 2026-03-14 --date-to 2026-03-16 --timeout 30 --retry-count 2
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html" --date-from 2026-03-14 --date-to 2026-03-16 --timeout 30 --retry-count 2
 ```
 
 Pipeline example:
 
 ```powershell
-python -m scripts.run_pipeline --disclosure-source jpx-tdnet --disclosure-url-template "https://www.jpx.co.jp/path/to/disclosure-list?date={date}"
+python -m scripts.run_pipeline --disclosure-source jpx-tdnet --disclosure-url-template "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html"
 ```
 
 Failure log examples:
@@ -1157,4 +1157,4 @@ Re-fetch confirmation procedure:
 4. confirm duplicate count does not increase because `source_disclosure_id` is normalized and stable
 5. check `/jobs` and `/disclosures` after rerun
 
-Because this execution environment does not have unrestricted outbound network access, the real JPX one-day smoke fetch was prepared and validated at the parser/test level, but final live verification must be run on Lightsail or another network-enabled host using the commands above.
+Live smoke verification against the official TDnet daily list page was completed with a temporary SQLite DB for `2026-03-16`. First run result: `fetched=249, inserted=248, skipped=1`. Second run for the same date: `fetched=249, inserted=0, skipped=249`, confirming stable dedupe on rerun.

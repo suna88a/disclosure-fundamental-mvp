@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disclosure-url-template",
         default=os.getenv("JPX_DISCLOSURE_URL_TEMPLATE", ""),
-        help="JPX TDnet list URL template. Must accept {date} in YYYY-MM-DD format.",
+        help="JPX TDnet list URL template. Supports {date} (YYYY-MM-DD), {date_yyyymmdd} (YYYYMMDD), and optional {page}.",
     )
     parser.add_argument(
         "--disclosure-timeout",

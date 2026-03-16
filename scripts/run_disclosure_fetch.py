@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", default=DEFAULT_SOURCE, choices=["dummy", "http-json", "jpx-tdnet"], help="Disclosure source backend.")
     parser.add_argument("--input", default="data/samples/disclosures_sample.json", help="Input file path for the dummy source.")
     parser.add_argument("--url", default=os.getenv("DISCLOSURE_SOURCE_URL", ""), help="HTTP JSON disclosure feed URL for the http-json source.")
-    parser.add_argument("--url-template", default=os.getenv("JPX_DISCLOSURE_URL_TEMPLATE", ""), help="JPX TDnet list URL template. Must accept {date} in YYYY-MM-DD format.")
+    parser.add_argument("--url-template", default=os.getenv("JPX_DISCLOSURE_URL_TEMPLATE", ""), help="JPX TDnet list URL template. Supports {date} (YYYY-MM-DD), {date_yyyymmdd} (YYYYMMDD), and optional {page}.")
     parser.add_argument("--date", dest="target_date", type=_parse_date, help="Target date in YYYY-MM-DD format. Defaults to today in JST.")
     parser.add_argument("--date-from", type=_parse_date, help="Range start date in YYYY-MM-DD format.")
     parser.add_argument("--date-to", type=_parse_date, help="Range end date in YYYY-MM-DD format.")

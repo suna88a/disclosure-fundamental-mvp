@@ -70,16 +70,34 @@ class DisclosureRepository:
         skipped = 0
         skipped_inactive = 0
         autocreated_companies = 0
+        seen_source_ids: set[str] = set()
+        seen_fallback_keys: set[tuple[str, int, datetime, str]] = set()
 
         for payload in payloads:
             company, autocreated = self.ensure_company_for_disclosure(payload)
             if autocreated:
                 autocreated_companies += 1
 
+            fallback_key = (
+                payload.source_name,
+                company.id,
+                payload.disclosed_at,
+                payload.title,
+            )
+            if payload.source_disclosure_id and payload.source_disclosure_id in seen_source_ids:
+                skipped += 1
+                continue
+            if fallback_key in seen_fallback_keys:
+                skipped += 1
+                continue
+
             existing = self.find_existing(payload, company.id)
             if existing is not None:
                 existing.is_new = False
                 skipped += 1
+                if payload.source_disclosure_id:
+                    seen_source_ids.add(payload.source_disclosure_id)
+                seen_fallback_keys.add(fallback_key)
                 continue
 
             disclosure = Disclosure(
@@ -98,6 +116,9 @@ class DisclosureRepository:
             )
             self.session.add(disclosure)
             inserted += 1
+            if payload.source_disclosure_id:
+                seen_source_ids.add(payload.source_disclosure_id)
+            seen_fallback_keys.add(fallback_key)
 
         self.session.flush()
         return {
