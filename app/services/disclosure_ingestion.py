@@ -5,6 +5,7 @@ from app.repositories.disclosure_repository import DisclosureCreateInput, Disclo
 from app.services.disclosure_classifier import DisclosureClassifier
 
 
+
 def ingest_disclosures(session: Session, fetcher: DisclosureFetcher) -> dict[str, int]:
     fetched = fetcher.fetch()
     repository = DisclosureRepository(session)
@@ -15,6 +16,7 @@ def ingest_disclosures(session: Session, fetcher: DisclosureFetcher) -> dict[str
         payloads.append(
             DisclosureCreateInput(
                 company_code=record.company_code,
+                company_name=record.company_name,
                 source_name=record.source_name,
                 disclosed_at=record.disclosed_at,
                 title=record.title,

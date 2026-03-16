@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
@@ -24,10 +24,12 @@ class StaticDisclosureFetcher:
         return self._records
 
 
+
 def _build_session() -> Session:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, future=True)()
+
 
 
 def _make_storage_dir() -> Path:
@@ -36,7 +38,8 @@ def _make_storage_dir() -> Path:
     return path
 
 
-def test_disclosure_ingestion_skips_inactive_companies() -> None:
+
+def test_disclosure_ingestion_persists_unknown_and_inactive_companies() -> None:
     session = _build_session()
     session.add_all(
         [
@@ -50,6 +53,7 @@ def test_disclosure_ingestion_skips_inactive_companies() -> None:
         [
             DisclosureRecord(
                 company_code="7203",
+                company_name="Toyota Motor Corporation",
                 source_name="dummy",
                 disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
                 title="Summary of Consolidated Financial Results",
@@ -58,20 +62,38 @@ def test_disclosure_ingestion_skips_inactive_companies() -> None:
             ),
             DisclosureRecord(
                 company_code="6758",
+                company_name="Sony Group Corporation",
                 source_name="dummy",
                 disclosed_at=datetime.fromisoformat("2026-03-13T15:01:00+09:00"),
                 title="Summary of Consolidated Financial Results",
                 source_url="https://example.com/2",
                 source_disclosure_id="a2",
             ),
+            DisclosureRecord(
+                company_code="9984",
+                company_name="SoftBank Group Corp.",
+                source_name="dummy",
+                disclosed_at=datetime.fromisoformat("2026-03-13T15:02:00+09:00"),
+                title="Notice Regarding Revision of Financial Forecasts",
+                source_url="https://example.com/3",
+                source_disclosure_id="a3",
+            ),
         ]
     )
 
     result = ingest_disclosures(session, fetcher)
+    saved_disclosures = list(session.scalars(select(Disclosure).order_by(Disclosure.id)))
+    stub_company = session.scalar(select(Company).where(Company.code == "9984"))
 
-    assert result["fetched"] == 2
-    assert result["inserted"] == 1
-    assert result["skipped_inactive"] == 1
+    assert result["fetched"] == 3
+    assert result["inserted"] == 3
+    assert result["skipped_inactive"] == 0
+    assert result["autocreated_companies"] == 1
+    assert len(saved_disclosures) == 3
+    assert stub_company is not None
+    assert stub_company.is_active is False
+    assert stub_company.name == "SoftBank Group Corp."
+
 
 
 def test_pdf_ingestion_ignores_inactive_company_disclosures() -> None:

@@ -1023,3 +1023,138 @@ Typical use:
 
 
 
+
+## JPX TDnet Fetcher
+
+The fixed production disclosure source is JPX Company Announcements Disclosure Service (TDnet browser pages).
+
+Implementation choice:
+
+- provider is fixed to JPX TDnet
+- the actual list URL is supplied as a template because the public JPX UI is JavaScript-driven
+- the template must accept `{date}` in `YYYY-MM-DD` format
+- the fetcher is designed for full-market ingestion first, then downstream active/analysis filtering
+
+Recommended environment variable:
+
+```env
+JPX_DISCLOSURE_URL_TEMPLATE=https://example.com/jpx/disclosures?date={date}
+```
+
+CLI examples:
+
+Fetch today in JST:
+
+```powershell
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://example.com/jpx/disclosures?date={date}"
+```
+
+Fetch one day explicitly:
+
+```powershell
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://example.com/jpx/disclosures?date={date}" --date 2026-03-16
+```
+
+Fetch a date range:
+
+```powershell
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://example.com/jpx/disclosures?date={date}" --date-from 2026-03-14 --date-to 2026-03-16
+```
+
+Pipeline example with JPX TDnet source:
+
+```powershell
+python -m scripts.run_pipeline --disclosure-source jpx-tdnet --disclosure-url-template "https://example.com/jpx/disclosures?date={date}"
+```
+
+15-minute cron example:
+
+```cron
+*/15 * * * * cd /srv/disclosure-fundamental-mvp && JPX_DISCLOSURE_URL_TEMPLATE="https://example.com/jpx/disclosures?date={date}" /srv/disclosure-fundamental-mvp/.venv/bin/python -m scripts.run_pipeline >> /srv/disclosure-fundamental-mvp/logs/pipeline.log 2>&1
+```
+
+Re-fetch procedure:
+
+- same-day retry: rerun `run_disclosure_fetch` for today or rerun the full pipeline
+- historical retry: use `--date` or `--date-from/--date-to`
+- dedupe still relies on `source_disclosure_id` first, then `source_name + company_id + disclosed_at + title`
+- unknown company codes are no longer rejected at ingest time; a stub inactive company row is created and the disclosure is still saved
+
+## JPX TDnet Production Hardening
+
+Recommended real-source production settings:
+
+```env
+JPX_DISCLOSURE_URL_TEMPLATE=https://www.jpx.co.jp/path/to/disclosure-list?date={date}
+```
+
+The production fetcher behavior is now explicit:
+
+- HTTP timeout is configurable
+- retry count is configurable
+- a User-Agent is always sent
+- `source_disclosure_id` is normalized from the absolute disclosure URL
+  - lower-cased scheme and host
+  - fragment removed
+  - query parameters sorted for stable dedupe
+- zero results are classified as one of:
+  - `normal_zero`
+  - `structure_anomaly_zero`
+
+Expected HTML structure:
+
+- at least one `<table>` exists
+- disclosure rows are represented by `<tr>` with at least 3 `<td>` cells
+- a row should contain:
+  - time text such as `15:00`
+  - company code
+  - company name
+  - title, usually through an `<a href="...">` element
+
+Normal zero means:
+
+- the page has a table
+- there are no data rows for the requested day
+
+Structure anomaly zero means:
+
+- no table exists, or
+- data rows exist but no valid disclosure record can be extracted
+
+Smoke fetch commands:
+
+One-day smoke fetch:
+
+```powershell
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.jpx.co.jp/path/to/disclosure-list?date={date}" --date 2026-03-16 --timeout 30 --retry-count 2
+```
+
+Range smoke fetch:
+
+```powershell
+python -m scripts.run_disclosure_fetch --source jpx-tdnet --url-template "https://www.jpx.co.jp/path/to/disclosure-list?date={date}" --date-from 2026-03-14 --date-to 2026-03-16 --timeout 30 --retry-count 2
+```
+
+Pipeline example:
+
+```powershell
+python -m scripts.run_pipeline --disclosure-source jpx-tdnet --disclosure-url-template "https://www.jpx.co.jp/path/to/disclosure-list?date={date}"
+```
+
+Failure log examples:
+
+- normal zero:
+  - `JPX fetch date=2026-03-16 status=normal_zero tables=1 rows=1 data_rows=0 extracted=0 url=...`
+- structure anomaly:
+  - `JPX fetch date=2026-03-16 status=structure_anomaly_zero tables=0 rows=0 data_rows=0 extracted=0 url=...`
+  - followed by `ValueError: JPX disclosure HTML structure anomaly for 2026-03-16: no_table_found`
+
+Re-fetch confirmation procedure:
+
+1. run one-day fetch for a known date
+2. confirm insert count on the first run
+3. rerun the same date
+4. confirm duplicate count does not increase because `source_disclosure_id` is normalized and stable
+5. check `/jobs` and `/disclosures` after rerun
+
+Because this execution environment does not have unrestricted outbound network access, the real JPX one-day smoke fetch was prepared and validated at the parser/test level, but final live verification must be run on Lightsail or another network-enabled host using the commands above.

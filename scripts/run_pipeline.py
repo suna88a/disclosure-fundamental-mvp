@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -14,6 +15,10 @@ class PipelineStep:
     description: str
 
 
+DEFAULT_DISCLOSURE_SOURCE = "jpx-tdnet" if os.getenv("JPX_DISCLOSURE_URL_TEMPLATE") else ("http-json" if os.getenv("DISCLOSURE_SOURCE_URL") else "dummy")
+
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the disclosure-driven MVP pipeline sequentially.")
     parser.add_argument(
@@ -23,14 +28,45 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--disclosure-source",
-        default="dummy",
-        choices=["dummy"],
+        default=DEFAULT_DISCLOSURE_SOURCE,
+        choices=["dummy", "http-json", "jpx-tdnet"],
         help="Disclosure fetch source backend.",
     )
     parser.add_argument(
         "--disclosure-input",
         default="data/samples/disclosures_sample.json",
         help="Input file for the dummy disclosure fetcher.",
+    )
+    parser.add_argument(
+        "--disclosure-url",
+        default=os.getenv("DISCLOSURE_SOURCE_URL", ""),
+        help="HTTP JSON disclosure feed URL for the http-json disclosure fetcher.",
+    )
+    parser.add_argument(
+        "--disclosure-url-template",
+        default=os.getenv("JPX_DISCLOSURE_URL_TEMPLATE", ""),
+        help="JPX TDnet list URL template. Must accept {date} in YYYY-MM-DD format.",
+    )
+    parser.add_argument(
+        "--disclosure-timeout",
+        type=int,
+        default=30,
+        help="HTTP timeout seconds for the real disclosure fetcher.",
+    )
+    parser.add_argument(
+        "--disclosure-date",
+        default="",
+        help="Target date in YYYY-MM-DD format for real disclosure fetchers.",
+    )
+    parser.add_argument(
+        "--disclosure-date-from",
+        default="",
+        help="Range start date in YYYY-MM-DD format for real disclosure fetchers.",
+    )
+    parser.add_argument(
+        "--disclosure-date-to",
+        default="",
+        help="Range end date in YYYY-MM-DD format for real disclosure fetchers.",
     )
     parser.add_argument(
         "--pdf-source",
@@ -78,20 +114,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
 def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     python_executable = args.python
+    fetch_command = [
+        python_executable,
+        "-m",
+        "scripts.run_disclosure_fetch",
+        "--source",
+        args.disclosure_source,
+        "--input",
+        args.disclosure_input,
+        "--url",
+        args.disclosure_url,
+        "--url-template",
+        args.disclosure_url_template,
+        "--timeout",
+        str(args.disclosure_timeout),
+    ]
+    if args.disclosure_date:
+        fetch_command.extend(["--date", args.disclosure_date])
+    if args.disclosure_date_from:
+        fetch_command.extend(["--date-from", args.disclosure_date_from])
+    if args.disclosure_date_to:
+        fetch_command.extend(["--date-to", args.disclosure_date_to])
+
     return [
         PipelineStep(
             name="fetch_disclosures",
-            command=[
-                python_executable,
-                "-m",
-                "scripts.run_disclosure_fetch",
-                "--source",
-                args.disclosure_source,
-                "--input",
-                args.disclosure_input,
-            ],
+            command=fetch_command,
             required=True,
             description="Fetch new disclosures and persist them with dedupe.",
         ),
@@ -170,14 +221,17 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
     ]
 
 
+
 def run_step(step: PipelineStep, workdir: Path) -> int:
     completed = subprocess.run(step.command, cwd=workdir, check=False)
     return completed.returncode
 
 
+
 def log(message: str) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}")
+
 
 
 def main() -> None:

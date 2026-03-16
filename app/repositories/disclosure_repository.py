@@ -13,6 +13,7 @@ from app.models.enums import DisclosureCategory, DisclosurePriority
 @dataclass
 class DisclosureCreateInput:
     company_code: str
+    company_name: str | None
     source_name: str
     disclosed_at: datetime
     title: str
@@ -32,6 +33,20 @@ class DisclosureRepository:
     def find_company_by_code(self, code: str) -> Company | None:
         statement = select(Company).where(Company.code == code)
         return self.session.scalar(statement)
+
+    def ensure_company_for_disclosure(self, payload: DisclosureCreateInput) -> tuple[Company, bool]:
+        company = self.find_company_by_code(payload.company_code)
+        if company is not None:
+            return company, False
+
+        company = Company(
+            code=payload.company_code,
+            name=payload.company_name or f"Unknown {payload.company_code}",
+            is_active=False,
+        )
+        self.session.add(company)
+        self.session.flush()
+        return company, True
 
     def find_existing(self, payload: DisclosureCreateInput, company_id: int) -> Disclosure | None:
         if payload.source_disclosure_id:
@@ -54,15 +69,12 @@ class DisclosureRepository:
         inserted = 0
         skipped = 0
         skipped_inactive = 0
+        autocreated_companies = 0
 
         for payload in payloads:
-            company = self.find_company_by_code(payload.company_code)
-            if company is None:
-                raise ValueError(f"Unknown company code: {payload.company_code}")
-
-            if not company.is_active:
-                skipped_inactive += 1
-                continue
+            company, autocreated = self.ensure_company_for_disclosure(payload)
+            if autocreated:
+                autocreated_companies += 1
 
             existing = self.find_existing(payload, company.id)
             if existing is not None:
@@ -88,4 +100,9 @@ class DisclosureRepository:
             inserted += 1
 
         self.session.flush()
-        return {"inserted": inserted, "skipped": skipped, "skipped_inactive": skipped_inactive}
+        return {
+            "inserted": inserted,
+            "skipped": skipped,
+            "skipped_inactive": skipped_inactive,
+            "autocreated_companies": autocreated_companies,
+        }
