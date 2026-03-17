@@ -6,7 +6,13 @@ from app.models.company import Company
 from app.models.disclosure import Disclosure
 from app.models.enums import DisclosureCategory, DisclosurePriority
 from app.models.valuation_view import ValuationView
-from app.services.notification_message_builder import build_dedupe_key, build_notification_body
+from app.services.notification_message_builder import (
+    build_dedupe_key,
+    build_notification_body,
+    build_raw_disclosure_batches,
+    classify_raw_disclosure,
+    filter_raw_disclosures,
+)
 
 
 def test_build_notification_body_contains_required_fields() -> None:
@@ -62,24 +68,22 @@ def test_build_dedupe_key_is_stable() -> None:
 def test_build_raw_disclosure_batches_splits_by_batch_size() -> None:
     company = Company(id=1, code="6758", name="Sony Group", name_ja="ソニーグループ")
     disclosures = []
-    for idx in range(3):
+    for idx, title in enumerate(["決算短信", "業績予想の修正に関するお知らせ", "配当予想の修正に関するお知らせ"], start=1):
         disclosures.append(
             Disclosure(
-                id=idx + 1,
+                id=idx,
                 company_id=1,
                 company=company,
                 source_name="jpx-tdnet",
-                disclosed_at=datetime.fromisoformat(f"2026-03-13T15:0{idx}:00+09:00"),
-                title=f"開示タイトル{idx + 1}",
+                disclosed_at=datetime.fromisoformat(f"2026-03-13T15:0{idx-1}:00+09:00"),
+                title=title,
                 category=DisclosureCategory.OTHER,
                 priority=DisclosurePriority.LOW,
-                source_url=f"https://example.com/disclosure/{idx + 1}",
+                source_url=f"https://example.com/disclosure/{idx}",
                 is_new=True,
                 is_analysis_target=False,
             )
         )
-
-    from app.services.notification_message_builder import build_raw_disclosure_batches
 
     batches = build_raw_disclosure_batches(disclosures=disclosures, batch_size=2, max_chars=1000)
 
@@ -87,4 +91,77 @@ def test_build_raw_disclosure_batches_splits_by_batch_size() -> None:
     assert len(batches[0][0]) == 2
     assert len(batches[1][0]) == 1
     assert "全市場 新規開示" in batches[0][1]
-    assert "https://example.com/disclosure/1" in batches[0][1]
+    assert "件】" in batches[0][1]
+    assert "【決算短信 1件】" in batches[0][1] or "【業績修正 1件】" in batches[0][1]
+
+
+def test_filter_raw_disclosures_excludes_etf_reit_and_infra() -> None:
+    equity = Company(id=1, code="1111", name="個別株")
+    reit = Company(id=2, code="2222", name="日本リート投資法人")
+    etf = Company(id=3, code="3333", name="TOPIX ETF")
+
+    disclosures = [
+        Disclosure(
+            id=1,
+            company_id=1,
+            company=equity,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+            title="決算短信",
+            category=DisclosureCategory.EARNINGS_REPORT,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/equity",
+            is_new=True,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=2,
+            company_id=2,
+            company=reit,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:01:00+09:00"),
+            title="運用状況のお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/reit",
+            is_new=True,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=3,
+            company_id=3,
+            company=etf,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:02:00+09:00"),
+            title="ETFに関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/etf",
+            is_new=True,
+            is_analysis_target=False,
+        ),
+    ]
+
+    filtered = filter_raw_disclosures(disclosures)
+
+    assert [disclosure.id for disclosure in filtered] == [1]
+
+
+
+def test_classify_raw_disclosure_prioritizes_guidance_over_dividend() -> None:
+    company = Company(id=1, code="1111", name="個別株")
+    disclosure = Disclosure(
+        id=1,
+        company_id=1,
+        company=company,
+        source_name="jpx-tdnet",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="業績予想及び配当予想の修正に関するお知らせ",
+        category=DisclosureCategory.OTHER,
+        priority=DisclosurePriority.LOW,
+        source_url="https://example.com/mixed",
+        is_new=True,
+        is_analysis_target=False,
+    )
+
+    assert classify_raw_disclosure(disclosure) == "guidance"

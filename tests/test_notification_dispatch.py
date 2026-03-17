@@ -336,6 +336,103 @@ def test_dispatch_raw_notifications_can_backfill_one_day(monkeypatch) -> None:
 
 
 
+def test_dispatch_raw_notifications_supports_dry_run(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    monkeypatch.setenv("RAW_NOTIFICATION_LOOKBACK_MINUTES", "60")
+    get_settings.cache_clear()
+
+    session = _build_session()
+    company = Company(code="5555", name="Dry Run Co")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="jpx-tdnet",
+        disclosed_at=datetime.fromisoformat("2026-03-17T11:00:00+09:00"),
+        title="決算短信",
+        category=DisclosureCategory.EARNINGS_REPORT,
+        priority=DisclosurePriority.LOW,
+        source_url="https://example.com/dry-run",
+        is_new=False,
+        is_analysis_target=False,
+    )
+    session.add(disclosure)
+    session.flush()
+    disclosure.created_at = datetime.now(disclosure.created_at.tzinfo) - timedelta(minutes=5)
+    session.commit()
+
+    result = dispatch_raw_disclosure_notifications(session, dry_run=True)
+
+    assert result["processed"] == 1
+    assert result["dry_run"] == 1
+    assert result["batch_count"] == 1
+    assert session.scalar(select(Notification).where(Notification.notification_type == NotificationType.RAW_DISCLOSURE_BATCH)) is None
+
+
+
+def test_dispatch_raw_notifications_supports_force_resend(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    monkeypatch.setenv("RAW_NOTIFICATION_LOOKBACK_MINUTES", "60")
+    get_settings.cache_clear()
+
+    sent_payloads: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_payloads.append(body)
+        return NotificationSendResult(external_message_id=f"dummy-force-{len(sent_payloads)}")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="6666", name="Force Co")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="jpx-tdnet",
+        disclosed_at=datetime.fromisoformat("2026-03-17T12:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.OTHER,
+        priority=DisclosurePriority.LOW,
+        source_url="https://example.com/force",
+        is_new=False,
+        is_analysis_target=False,
+    )
+    session.add(disclosure)
+    session.flush()
+    disclosure.created_at = datetime.now(disclosure.created_at.tzinfo) - timedelta(minutes=5)
+    session.commit()
+
+    first = dispatch_raw_disclosure_notifications(session)
+    second = dispatch_raw_disclosure_notifications(session, target_date=date(2026, 3, 17), force=True)
+
+    assert first["sent"] == 1
+    assert second["sent"] == 1
+    assert len(sent_payloads) == 2
+    assert session.scalars(select(Notification).where(Notification.notification_type == NotificationType.RAW_DISCLOSURE_BATCH)).all()
+
+
+
+def test_dispatch_raw_notifications_force_requires_date(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    get_settings.cache_clear()
+
+    session = _build_session()
+
+    try:
+        dispatch_raw_disclosure_notifications(session, force=True)
+    except ValueError as exc:
+        assert "requires --date" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when --force is used without --date.")
+
+
+
 def test_dispatch_raw_notifications_requires_discord_webhook(monkeypatch) -> None:
     monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "discord")
     monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "discord-raw")

@@ -1176,8 +1176,10 @@ Raw disclosure notifications are separate from the existing high-conviction `sho
 Purpose:
 
 - send newly fetched full-market disclosures to a separate Discord group
+- exclude ETF / ETN / REIT / infrastructure-fund style disclosures from the raw feed
 - keep the primary analysis notification path unchanged
 - batch multiple disclosures into one Discord message every pipeline run
+- group the raw message by category for readability
 - avoid duplicate sends on rerun
 
 Environment variables:
@@ -1198,9 +1200,15 @@ Behavior:
 
 - primary notifications still use `dispatch_notifications`
 - raw market notifications use `dispatch_raw_notifications`
+- raw messages are filtered to plain equity-style disclosures only at send time; all disclosures remain saved in SQLite
 - raw notifications are sent for disclosures that are newly ingested within the configured lookback window, or for a replay date supplied to `run_raw_notifications`
 - each disclosure still gets its own dedupe key in the `notifications` table
+- categories are rendered in this order: 決算短信 / 業績修正 / 配当修正 / その他
+- each category header includes a count, for example `【業績修正 12件】`
+- if one title implies both guidance revision and dividend revision, it is shown under 業績修正 first
 - reruns do not resend the same disclosure because dedupe is based on `notification_type=raw_disclosure_batch` plus disclosure/channel/destination
+- normal cron operation uses `created_at` lookback; replay uses `--date YYYY-MM-DD`
+- `--dry-run` previews candidate counts without sending, and `--force` intentionally resends the selected set
 - sending is grouped into batches and split again if the Discord message body would grow too large
 
 Manual commands:
@@ -1210,6 +1218,8 @@ python -m scripts.run_notifications
 python -m scripts.run_raw_notifications
 python -m scripts.run_raw_notifications --lookback-minutes 60
 python -m scripts.run_raw_notifications --date 2026-03-17
+python -m scripts.run_raw_notifications --date 2026-03-17 --dry-run
+python -m scripts.run_raw_notifications --date 2026-03-17 --force
 ```
 
 Pipeline behavior:

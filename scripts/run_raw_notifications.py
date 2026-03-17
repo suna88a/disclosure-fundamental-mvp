@@ -9,6 +9,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Dispatch batched raw disclosure notifications.")
     parser.add_argument("--lookback-minutes", type=int, default=None, help="Look back this many minutes using disclosure created_at.")
     parser.add_argument("--date", default="", help="Replay or backfill disclosures for one JST date (YYYY-MM-DD).")
+    parser.add_argument("--force", action="store_true", help="Ignore raw notification dedupe and resend the selected disclosures.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview candidate counts without creating notification rows or sending webhooks.")
     return parser.parse_args()
 
 
@@ -21,6 +23,8 @@ def main() -> None:
             context.session,
             lookback_minutes=args.lookback_minutes,
             target_date=target_date,
+            force=args.force,
+            dry_run=args.dry_run,
         )
         context.set_processed_count(result["processed"])
         return result

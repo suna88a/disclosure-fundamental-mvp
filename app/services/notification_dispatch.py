@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+import logging
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -16,11 +17,13 @@ from app.services.notification_message_builder import (
     build_dedupe_key,
     build_notification_body,
     build_raw_disclosure_batches,
+    filter_raw_disclosures,
 )
 from app.services.notifiers import DiscordNotifier, DummyNotifier, TelegramNotifier
 
 
 JST = ZoneInfo("Asia/Tokyo")
+logger = logging.getLogger(__name__)
 
 
 
@@ -103,6 +106,8 @@ def dispatch_raw_disclosure_notifications(
     *,
     lookback_minutes: int | None = None,
     target_date: date | None = None,
+    force: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     settings = get_settings()
     if not settings.raw_notification_channel:
@@ -119,12 +124,18 @@ def dispatch_raw_disclosure_notifications(
     notifier = _build_notifier(channel, discord_webhook_url=settings.raw_discord_webhook_url)
     repository = NotificationRepository(session)
 
+    if force and target_date is None:
+        raise ValueError("--force requires --date for raw disclosure notifications.")
+
     effective_lookback_minutes = lookback_minutes or settings.raw_notification_lookback_minutes
-    disclosures = _select_raw_disclosure_candidates(
+    mode = "replay" if target_date is not None else "lookback"
+    all_candidates = _select_raw_disclosure_candidates(
         session,
         lookback_minutes=effective_lookback_minutes,
         target_date=target_date,
     )
+    disclosures = filter_raw_disclosures(all_candidates)
+    filtered_out = len(all_candidates) - len(disclosures)
 
     processed = 0
     skipped = 0
@@ -140,23 +151,63 @@ def dispatch_raw_disclosure_notifications(
             channel=channel.value,
             destination=destination,
         )
-        if repository.get_by_dedupe_key(dedupe_key) is not None:
+        if not force and repository.get_by_dedupe_key(dedupe_key) is not None:
             skipped += 1
             continue
         pending_disclosures.append(disclosure)
 
     if not pending_disclosures:
-        return {"processed": processed, "sent": 0, "skipped": skipped, "failed": 0, "messages_sent": 0}
+        result = {
+            "mode": mode,
+            "target_date": target_date.isoformat() if target_date else None,
+            "lookback_minutes": effective_lookback_minutes,
+            "processed": processed,
+            "filtered_out": filtered_out,
+            "candidates": 0,
+            "skipped": skipped,
+            "sent": 0,
+            "failed": 0,
+            "messages_sent": 0,
+            "forced": int(force),
+            "dry_run": int(dry_run),
+        }
+        logger.info("raw_notification mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s", mode, result["target_date"], effective_lookback_minutes, processed, filtered_out, 0, skipped, 0, 0, int(force))
+        return result
 
     batches = build_raw_disclosure_batches(
         disclosures=pending_disclosures,
         batch_size=settings.raw_notification_batch_size,
     )
     messages_sent = 0
+    candidate_count = sum(len(disclosures_in_batch) for disclosures_in_batch, _ in batches)
 
+    if dry_run:
+        result = {
+            "mode": mode,
+            "target_date": target_date.isoformat() if target_date else None,
+            "lookback_minutes": effective_lookback_minutes,
+            "processed": processed,
+            "filtered_out": filtered_out,
+            "candidates": candidate_count,
+            "skipped": skipped,
+            "sent": 0,
+            "failed": 0,
+            "messages_sent": 0,
+            "forced": int(force),
+            "dry_run": 1,
+            "batch_count": len(batches),
+            "batched_disclosures": candidate_count,
+        }
+        logger.info("raw_notification mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s", mode, result["target_date"], effective_lookback_minutes, processed, filtered_out, candidate_count, skipped, 0, 0, int(force))
+        return result
+
+    force_note = "\n\n[FORCED REPLAY]" if force else ""
     for disclosures_in_batch, body in batches:
         notifications = []
+        persist_notifications = not force
         for disclosure in disclosures_in_batch:
+            if not persist_notifications:
+                continue
             dedupe_key = build_dedupe_key(
                 disclosure_id=disclosure.id,
                 notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
@@ -174,25 +225,40 @@ def dispatch_raw_disclosure_notifications(
                 )
             )
         try:
-            result = notifier.send(destination, body)
+            result = notifier.send(destination, body + force_note)
             messages_sent += 1
-            for notification in notifications:
-                repository.mark_sent(notification, result.external_message_id)
-                sent += 1
+            if notifications:
+                for notification in notifications:
+                    repository.mark_sent(notification, result.external_message_id)
+                    sent += 1
+            else:
+                sent += len(disclosures_in_batch)
         except Exception as exc:
-            for notification in notifications:
-                repository.mark_failed(notification, str(exc))
-                failed += 1
+            if notifications:
+                for notification in notifications:
+                    repository.mark_failed(notification, str(exc))
+                    failed += 1
+            else:
+                failed += len(disclosures_in_batch)
 
     session.flush()
     session.expire_all()
-    return {
+    result = {
+        "mode": mode,
+        "target_date": target_date.isoformat() if target_date else None,
+        "lookback_minutes": effective_lookback_minutes,
         "processed": processed,
-        "sent": sent,
+        "filtered_out": filtered_out,
+        "candidates": candidate_count,
         "skipped": skipped,
+        "sent": sent,
         "failed": failed,
         "messages_sent": messages_sent,
+        "forced": int(force),
+        "dry_run": 0,
     }
+    logger.info("raw_notification mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s", mode, result["target_date"], effective_lookback_minutes, processed, filtered_out, candidate_count, skipped, sent, messages_sent, int(force))
+    return result
 
 
 
