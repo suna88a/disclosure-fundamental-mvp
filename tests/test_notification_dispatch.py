@@ -1,5 +1,5 @@
 from decimal import Decimal
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -241,11 +241,15 @@ def test_dispatch_raw_notifications_batches_and_dedupes(monkeypatch) -> None:
             category=DisclosureCategory.OTHER,
             priority=DisclosurePriority.LOW,
             source_url=f"https://example.com/raw/{idx}",
-            is_new=True,
+            is_new=False,
             is_analysis_target=False,
         )
         disclosures.append(disclosure)
     session.add_all(disclosures)
+    session.flush()
+    recent = datetime.now(disclosures[0].created_at.tzinfo) - timedelta(minutes=5)
+    for disclosure in disclosures:
+        disclosure.created_at = recent
     session.commit()
 
     first = dispatch_raw_disclosure_notifications(session)
@@ -263,6 +267,72 @@ def test_dispatch_raw_notifications_batches_and_dedupes(monkeypatch) -> None:
     assert "https://example.com/raw/2" in combined_bodies
     assert "https://example.com/raw/3" in combined_bodies
     assert len(notifications) == 3
+
+
+
+def test_dispatch_raw_notifications_can_backfill_one_day(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    get_settings.cache_clear()
+
+    sent_payloads: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_payloads.append(body)
+        return NotificationSendResult(external_message_id=f"dummy-backfill-{len(sent_payloads)}")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7777", name="Replay Co")
+    session.add(company)
+    session.flush()
+    session.add_all([
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-17T09:00:00+09:00"),
+            title="当日開示A",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/replay/a",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-17T10:00:00+09:00"),
+            title="当日開示B",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/replay/b",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-16T10:00:00+09:00"),
+            title="前日開示",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/replay/c",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+    ])
+    session.commit()
+
+    result = dispatch_raw_disclosure_notifications(session, target_date=date(2026, 3, 17))
+
+    assert result["processed"] == 2
+    assert result["sent"] == 2
+    assert len(sent_payloads) == 1
+    assert "https://example.com/replay/a" in sent_payloads[0]
+    assert "https://example.com/replay/b" in sent_payloads[0]
+    assert "https://example.com/replay/c" not in sent_payloads[0]
 
 
 

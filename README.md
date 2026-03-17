@@ -1191,14 +1191,16 @@ RAW_NOTIFICATION_CHANNEL=discord
 RAW_NOTIFICATION_DESTINATION=discord-raw
 RAW_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/raw/...
 RAW_NOTIFICATION_BATCH_SIZE=20
+RAW_NOTIFICATION_LOOKBACK_MINUTES=20
 ```
 
 Behavior:
 
 - primary notifications still use `dispatch_notifications`
 - raw market notifications use `dispatch_raw_notifications`
-- raw notifications are sent for disclosures that are `is_new=True` and have not already been sent with `notification_type=raw_disclosure_batch`
+- raw notifications are sent for disclosures that are newly ingested within the configured lookback window, or for a replay date supplied to `run_raw_notifications`
 - each disclosure still gets its own dedupe key in the `notifications` table
+- reruns do not resend the same disclosure because dedupe is based on `notification_type=raw_disclosure_batch` plus disclosure/channel/destination
 - sending is grouped into batches and split again if the Discord message body would grow too large
 
 Manual commands:
@@ -1206,6 +1208,8 @@ Manual commands:
 ```powershell
 python -m scripts.run_notifications
 python -m scripts.run_raw_notifications
+python -m scripts.run_raw_notifications --lookback-minutes 60
+python -m scripts.run_raw_notifications --date 2026-03-17
 ```
 
 Pipeline behavior:

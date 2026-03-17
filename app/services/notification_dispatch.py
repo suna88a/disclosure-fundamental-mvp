@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -15,6 +18,9 @@ from app.services.notification_message_builder import (
     build_raw_disclosure_batches,
 )
 from app.services.notifiers import DiscordNotifier, DummyNotifier, TelegramNotifier
+
+
+JST = ZoneInfo("Asia/Tokyo")
 
 
 
@@ -92,7 +98,12 @@ def dispatch_notifications(session: Session) -> dict[str, int]:
 
 
 
-def dispatch_raw_disclosure_notifications(session: Session) -> dict[str, int]:
+def dispatch_raw_disclosure_notifications(
+    session: Session,
+    *,
+    lookback_minutes: int | None = None,
+    target_date: date | None = None,
+) -> dict[str, int]:
     settings = get_settings()
     if not settings.raw_notification_channel:
         return {"processed": 0, "sent": 0, "skipped": 0, "failed": 0, "messages_sent": 0, "disabled": 1}
@@ -108,13 +119,11 @@ def dispatch_raw_disclosure_notifications(session: Session) -> dict[str, int]:
     notifier = _build_notifier(channel, discord_webhook_url=settings.raw_discord_webhook_url)
     repository = NotificationRepository(session)
 
-    disclosures = list(
-        session.scalars(
-            select(Disclosure)
-            .options(selectinload(Disclosure.company))
-            .where(Disclosure.is_new.is_(True))
-            .order_by(Disclosure.disclosed_at.desc(), Disclosure.id.desc())
-        )
+    effective_lookback_minutes = lookback_minutes or settings.raw_notification_lookback_minutes
+    disclosures = _select_raw_disclosure_candidates(
+        session,
+        lookback_minutes=effective_lookback_minutes,
+        target_date=target_date,
     )
 
     processed = 0
@@ -184,6 +193,27 @@ def dispatch_raw_disclosure_notifications(session: Session) -> dict[str, int]:
         "failed": failed,
         "messages_sent": messages_sent,
     }
+
+
+
+def _select_raw_disclosure_candidates(
+    session: Session,
+    *,
+    lookback_minutes: int,
+    target_date: date | None,
+) -> list[Disclosure]:
+    query = select(Disclosure).options(selectinload(Disclosure.company))
+
+    if target_date is not None:
+        start_at = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=JST)
+        end_at = start_at + timedelta(days=1)
+        query = query.where(Disclosure.disclosed_at >= start_at, Disclosure.disclosed_at < end_at)
+    else:
+        cutoff = datetime.now(UTC) - timedelta(minutes=lookback_minutes)
+        query = query.where(Disclosure.created_at >= cutoff)
+
+    query = query.order_by(Disclosure.disclosed_at.desc(), Disclosure.id.desc())
+    return list(session.scalars(query))
 
 
 
