@@ -979,7 +979,9 @@ For weekly maintenance on a small VPS:
 - If `companies.name_ja` is populated, UI and notifications prefer the Japanese company name over the fallback name field.
 - UI formatting rounds scores and rates for readability. Stored values remain unchanged in SQLite.
 - `valuation_views` is generated from `analysis_results` as a conservative hypothesis layer, not as a price-screening or price-prediction feature.
-- Notifications use `disclosure_id + notification_type + channel + destination` as the dedupe key, and they can run in `dummy` mode or `telegram` mode.
+- Notifications use `disclosure_id + notification_type + channel + destination` as the dedupe key.
+- The primary notification path continues to use `should_notify` based analysis alerts.
+- A secondary raw-market notification path can batch newly fetched disclosures to a separate Discord webhook every pipeline run.
 - UI currently exposes two lightweight server-rendered pages: `/disclosures` and `/disclosures/{id}`. The notification detail URL should point to `/disclosures/{id}`.
 - Additional lightweight operations views are available at `/notifications` and `/jobs` for notification history and latest job health checks.
 - `job_runs` stores `processed_count` plus `result_summary_json` when a job returns a dict. `/jobs` shows only a short summary of the most useful counters.
@@ -1158,3 +1160,60 @@ Re-fetch confirmation procedure:
 5. check `/jobs` and `/disclosures` after rerun
 
 Live smoke verification against the official TDnet daily list page was completed with a temporary SQLite DB for `2026-03-16`. First run result: `fetched=249, inserted=248, skipped=1`. Second run for the same date: `fetched=249, inserted=0, skipped=249`, confirming stable dedupe on rerun.
+
+
+## Raw Disclosure Notifications
+
+Raw disclosure notifications are separate from the existing high-conviction `should_notify` alerts.
+
+Purpose:
+
+- send newly fetched full-market disclosures to a separate Discord group
+- keep the primary analysis notification path unchanged
+- batch multiple disclosures into one Discord message every pipeline run
+- avoid duplicate sends on rerun
+
+Environment variables:
+
+```env
+NOTIFICATION_CHANNEL=discord
+NOTIFICATION_DESTINATION=discord-main
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/primary/...
+
+RAW_NOTIFICATION_CHANNEL=discord
+RAW_NOTIFICATION_DESTINATION=discord-raw
+RAW_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/raw/...
+RAW_NOTIFICATION_BATCH_SIZE=20
+```
+
+Behavior:
+
+- primary notifications still use `dispatch_notifications`
+- raw market notifications use `dispatch_raw_notifications`
+- raw notifications are sent for disclosures that are `is_new=True` and have not already been sent with `notification_type=raw_disclosure_batch`
+- each disclosure still gets its own dedupe key in the `notifications` table
+- sending is grouped into batches and split again if the Discord message body would grow too large
+
+Manual commands:
+
+```powershell
+python -m scripts.run_notifications
+python -m scripts.run_raw_notifications
+```
+
+Pipeline behavior:
+
+- `scripts.run_pipeline` runs primary notifications first
+- `scripts.run_pipeline` then runs raw disclosure notifications as a separate final step
+
+Lightsail rollout:
+
+1. update `.env`
+2. restart the web service if needed
+3. run a manual raw notification job once
+4. confirm results in `/notifications` and Discord
+
+```bash
+cd /srv/disclosure-fundamental-mvp
+.venv/bin/python -m scripts.run_raw_notifications
+```

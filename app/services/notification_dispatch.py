@@ -9,7 +9,11 @@ from app.models.company import Company
 from app.models.disclosure import Disclosure
 from app.models.enums import NotificationChannel, NotificationType
 from app.repositories.notification_repository import NotificationRepository
-from app.services.notification_message_builder import build_dedupe_key, build_notification_body
+from app.services.notification_message_builder import (
+    build_dedupe_key,
+    build_notification_body,
+    build_raw_disclosure_batches,
+)
 from app.services.notifiers import DiscordNotifier, DummyNotifier, TelegramNotifier
 
 
@@ -88,13 +92,108 @@ def dispatch_notifications(session: Session) -> dict[str, int]:
 
 
 
-def _build_notifier(channel: NotificationChannel):
+def dispatch_raw_disclosure_notifications(session: Session) -> dict[str, int]:
+    settings = get_settings()
+    if not settings.raw_notification_channel:
+        return {"processed": 0, "sent": 0, "skipped": 0, "failed": 0, "messages_sent": 0, "disabled": 1}
+
+    channel = NotificationChannel(settings.raw_notification_channel)
+    destination = _resolve_destination(
+        channel,
+        settings.raw_notification_destination,
+        settings.telegram_chat_id,
+    )
+    if channel == NotificationChannel.DISCORD and not settings.raw_discord_webhook_url:
+        raise ValueError("RAW_DISCORD_WEBHOOK_URL is required for raw discord notifications.")
+    notifier = _build_notifier(channel, discord_webhook_url=settings.raw_discord_webhook_url)
+    repository = NotificationRepository(session)
+
+    disclosures = list(
+        session.scalars(
+            select(Disclosure)
+            .options(selectinload(Disclosure.company))
+            .where(Disclosure.is_new.is_(True))
+            .order_by(Disclosure.disclosed_at.desc(), Disclosure.id.desc())
+        )
+    )
+
+    processed = 0
+    skipped = 0
+    sent = 0
+    failed = 0
+    pending_disclosures: list[Disclosure] = []
+
+    for disclosure in disclosures:
+        processed += 1
+        dedupe_key = build_dedupe_key(
+            disclosure_id=disclosure.id,
+            notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
+            channel=channel.value,
+            destination=destination,
+        )
+        if repository.get_by_dedupe_key(dedupe_key) is not None:
+            skipped += 1
+            continue
+        pending_disclosures.append(disclosure)
+
+    if not pending_disclosures:
+        return {"processed": processed, "sent": 0, "skipped": skipped, "failed": 0, "messages_sent": 0}
+
+    batches = build_raw_disclosure_batches(
+        disclosures=pending_disclosures,
+        batch_size=settings.raw_notification_batch_size,
+    )
+    messages_sent = 0
+
+    for disclosures_in_batch, body in batches:
+        notifications = []
+        for disclosure in disclosures_in_batch:
+            dedupe_key = build_dedupe_key(
+                disclosure_id=disclosure.id,
+                notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
+                channel=channel.value,
+                destination=destination,
+            )
+            notifications.append(
+                repository.create_pending(
+                    disclosure_id=disclosure.id,
+                    notification_type=NotificationType.RAW_DISCLOSURE_BATCH,
+                    channel=channel,
+                    destination=destination,
+                    dedupe_key=dedupe_key,
+                    body=body,
+                )
+            )
+        try:
+            result = notifier.send(destination, body)
+            messages_sent += 1
+            for notification in notifications:
+                repository.mark_sent(notification, result.external_message_id)
+                sent += 1
+        except Exception as exc:
+            for notification in notifications:
+                repository.mark_failed(notification, str(exc))
+                failed += 1
+
+    session.flush()
+    session.expire_all()
+    return {
+        "processed": processed,
+        "sent": sent,
+        "skipped": skipped,
+        "failed": failed,
+        "messages_sent": messages_sent,
+    }
+
+
+
+def _build_notifier(channel: NotificationChannel, *, discord_webhook_url: str | None = None):
     if channel == NotificationChannel.DUMMY:
         return DummyNotifier()
     if channel == NotificationChannel.TELEGRAM:
         return TelegramNotifier()
     if channel == NotificationChannel.DISCORD:
-        return DiscordNotifier()
+        return DiscordNotifier(webhook_url=discord_webhook_url)
     raise ValueError(f"Unsupported notification channel: {channel}")
 
 

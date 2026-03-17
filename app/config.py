@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     web_base_url: str = "https://example.com/app"
     notification_channel: str = "dummy"
     notification_destination: str = "dummy-channel"
+    raw_notification_channel: str | None = None
+    raw_notification_destination: str = "discord-raw"
+    raw_discord_webhook_url: str | None = None
+    raw_notification_batch_size: int = 20
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     discord_webhook_url: str | None = None

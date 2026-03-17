@@ -56,3 +56,35 @@ def test_build_dedupe_key_is_stable() -> None:
         destination="test-room",
     )
     assert key == "10:analysis_alert:dummy:test-room"
+
+
+
+def test_build_raw_disclosure_batches_splits_by_batch_size() -> None:
+    company = Company(id=1, code="6758", name="Sony Group", name_ja="ソニーグループ")
+    disclosures = []
+    for idx in range(3):
+        disclosures.append(
+            Disclosure(
+                id=idx + 1,
+                company_id=1,
+                company=company,
+                source_name="jpx-tdnet",
+                disclosed_at=datetime.fromisoformat(f"2026-03-13T15:0{idx}:00+09:00"),
+                title=f"開示タイトル{idx + 1}",
+                category=DisclosureCategory.OTHER,
+                priority=DisclosurePriority.LOW,
+                source_url=f"https://example.com/disclosure/{idx + 1}",
+                is_new=True,
+                is_analysis_target=False,
+            )
+        )
+
+    from app.services.notification_message_builder import build_raw_disclosure_batches
+
+    batches = build_raw_disclosure_batches(disclosures=disclosures, batch_size=2, max_chars=1000)
+
+    assert len(batches) == 2
+    assert len(batches[0][0]) == 2
+    assert len(batches[1][0]) == 1
+    assert "全市場 新規開示" in batches[0][1]
+    assert "https://example.com/disclosure/1" in batches[0][1]

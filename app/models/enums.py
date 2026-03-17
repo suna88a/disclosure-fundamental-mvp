@@ -136,3 +136,4 @@ class NotificationChannel(StrEnum):
 
 class NotificationType(StrEnum):
     ANALYSIS_ALERT = "analysis_alert"
+    RAW_DISCLOSURE_BATCH = "raw_disclosure_batch"

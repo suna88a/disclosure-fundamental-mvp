@@ -15,11 +15,12 @@ from app.models.enums import (
     DisclosureCategory,
     DisclosurePriority,
     NotificationStatus,
+    NotificationType,
     RevisionDetectionStatus,
 )
 from app.models.notification import Notification
 from app.models.valuation_view import ValuationView
-from app.services.notification_dispatch import dispatch_notifications
+from app.services.notification_dispatch import dispatch_notifications, dispatch_raw_disclosure_notifications
 from app.services.notifiers import NotificationSendResult
 
 
@@ -204,3 +205,78 @@ def test_dispatch_notifications_requires_discord_webhook_url(monkeypatch) -> Non
         assert "DISCORD_WEBHOOK_URL" in str(exc)
     else:
         raise AssertionError("Expected ValueError when DISCORD_WEBHOOK_URL is missing.")
+
+
+
+def test_dispatch_raw_notifications_batches_and_dedupes(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "2")
+    get_settings.cache_clear()
+
+    sent_payloads: list[tuple[str, str]] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_payloads.append((destination, body))
+        return NotificationSendResult(external_message_id=f"dummy-raw-{len(sent_payloads)}")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    companies = [
+        Company(code="1111", name="A", is_active=False),
+        Company(code="2222", name="B"),
+        Company(code="3333", name="C"),
+    ]
+    session.add_all(companies)
+    session.flush()
+
+    disclosures = []
+    for idx, company in enumerate(companies, start=1):
+        disclosure = Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat(f"2026-03-13T15:0{idx}:00+09:00"),
+            title=f"開示タイトル{idx}",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url=f"https://example.com/raw/{idx}",
+            is_new=True,
+            is_analysis_target=False,
+        )
+        disclosures.append(disclosure)
+    session.add_all(disclosures)
+    session.commit()
+
+    first = dispatch_raw_disclosure_notifications(session)
+    second = dispatch_raw_disclosure_notifications(session)
+    notifications = list(session.scalars(select(Notification).where(Notification.notification_type == NotificationType.RAW_DISCLOSURE_BATCH)))
+
+    assert first["processed"] == 3
+    assert first["sent"] == 3
+    assert first["messages_sent"] == 2
+    assert second["skipped"] == 3
+    assert len(sent_payloads) == 2
+    assert all(payload[0] == "raw-room" for payload in sent_payloads)
+    combined_bodies = "\n".join(body for _, body in sent_payloads)
+    assert "https://example.com/raw/1" in combined_bodies
+    assert "https://example.com/raw/2" in combined_bodies
+    assert "https://example.com/raw/3" in combined_bodies
+    assert len(notifications) == 3
+
+
+
+def test_dispatch_raw_notifications_requires_discord_webhook(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "discord")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "discord-raw")
+    monkeypatch.delenv("RAW_DISCORD_WEBHOOK_URL", raising=False)
+    get_settings.cache_clear()
+
+    session = _build_session()
+
+    try:
+        dispatch_raw_disclosure_notifications(session)
+    except ValueError as exc:
+        assert "DISCORD_WEBHOOK_URL" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError when RAW_DISCORD_WEBHOOK_URL is missing.")

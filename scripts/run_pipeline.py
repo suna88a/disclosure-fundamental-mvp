@@ -218,6 +218,12 @@ def build_steps(args: argparse.Namespace) -> list[PipelineStep]:
             required=False,
             description="Send non-duplicate notifications for should_notify disclosures.",
         ),
+        PipelineStep(
+            name="dispatch_raw_notifications",
+            command=[python_executable, "-m", "scripts.run_raw_notifications"],
+            required=False,
+            description="Send batched raw-market disclosure notifications to the secondary channel.",
+        ),
     ]
 
 

@@ -44,11 +44,11 @@ class TelegramNotifier:
 
 
 class DiscordNotifier:
-    def __init__(self) -> None:
+    def __init__(self, webhook_url: str | None = None) -> None:
         settings = get_settings()
-        if not settings.discord_webhook_url:
+        self.webhook_url = webhook_url or settings.discord_webhook_url
+        if not self.webhook_url:
             raise ValueError("DISCORD_WEBHOOK_URL is required for discord notifications.")
-        self.webhook_url = settings.discord_webhook_url
 
     def send(self, destination: str, body: str) -> NotificationSendResult:
         response = requests.post(
