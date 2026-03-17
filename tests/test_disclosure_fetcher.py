@@ -11,9 +11,12 @@ from sqlalchemy.orm import sessionmaker
 
 
 class DummyResponse:
-    def __init__(self, payload=None, text: str = ""):
+    def __init__(self, payload=None, text: str = "", content: bytes | None = None, headers: dict[str, str] | None = None, apparent_encoding: str | None = None):
         self._payload = payload
         self.text = text
+        self.content = content if content is not None else text.encode("utf-8")
+        self.headers = headers or {}
+        self.apparent_encoding = apparent_encoding
 
     def raise_for_status(self) -> None:
         return None
@@ -88,6 +91,43 @@ def test_http_json_disclosure_fetcher_rejects_missing_required_fields(monkeypatc
     with pytest.raises(ValueError):
         fetcher.fetch()
 
+
+
+def test_jpx_tdnet_fetcher_decodes_utf8_html_without_mojibake() -> None:
+    html = """
+    <html><head><meta charset="UTF-8"></head><body>
+      <table id="main-list-table">
+        <tr><th>時刻</th><th>コード</th><th>会社名</th><th>表題</th></tr>
+        <tr>
+          <td class="kjTime">15:00</td>
+          <td class="kjCode">43230</td>
+          <td class="kjName">日本システム技術</td>
+          <td class="kjTitle"><a href="140120260316582566.pdf">Ｅ－ＷｉｓｄｏｍＴｒに関するお知らせ</a></td>
+        </tr>
+      </table>
+    </body></html>
+    """
+    raw = html.encode("utf-8")
+    mojibake_text = raw.decode("latin-1")
+
+    def fake_get(url: str, timeout: int):
+        return DummyResponse(
+            text=mojibake_text,
+            content=raw,
+            headers={"Content-Type": "text/html; charset=iso-8859-1"},
+            apparent_encoding="utf-8",
+        )
+
+    fetcher = JpxTdnetDisclosureFetcher(
+        "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html",
+        target_date=date(2026, 3, 16),
+        session=DummySession(fake_get),
+    )
+    records = fetcher.fetch()
+
+    assert len(records) == 1
+    assert records[0].company_name == "日本システム技術"
+    assert records[0].title == "Ｅ－ＷｉｓｄｏｍＴｒに関するお知らせ"
 
 
 def test_jpx_tdnet_fetcher_reads_single_day_html() -> None:

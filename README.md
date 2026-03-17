@@ -1107,6 +1107,13 @@ The production fetcher behavior is now explicit:
 Expected HTML structure:
 
 - landing page: `https://www.release.tdnet.info/inbs/I_main_00.html`
+
+TDnet encoding handling:
+
+- the fetcher decodes from `response.content`, not `response.text`
+- it evaluates meta charset, apparent encoding, UTF-8, and CP932/Shift_JIS fallbacks
+- UTF-8 is preferred when the content clearly contains valid Japanese text
+- this prevents mojibake such as `日本システム技術 -> æ¥æ¬...` before saving to SQLite
 - daily list pages: `https://www.release.tdnet.info/inbs/I_list_001_YYYYMMDD.html`
 - additional pages are linked from pager controls such as `pagerLink('I_list_002_YYYYMMDD.html')`
 - disclosure rows live under `table#main-list-table`

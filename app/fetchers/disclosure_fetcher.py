@@ -11,8 +11,9 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, UnicodeDammit
 from requests.adapters import HTTPAdapter
+from requests.utils import get_encoding_from_headers
 from urllib3.util.retry import Retry
 
 
@@ -265,7 +266,7 @@ class JpxTdnetDisclosureFetcher:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
             page_records, page_diagnostics, next_pages = self._parse_html(
-                response.text,
+                self._decode_html_response(response),
                 base_url=url,
                 target_date=target_date,
             )
@@ -297,6 +298,71 @@ class JpxTdnetDisclosureFetcher:
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         session.headers.update({"User-Agent": self.user_agent})
+
+    @staticmethod
+    def _extract_meta_charset(raw_bytes: bytes) -> str | None:
+        head = raw_bytes[:4096].decode("ascii", errors="ignore")
+        match = re.search(r"<meta[^>]+charset=['\"]?([a-zA-Z0-9_\-]+)", head, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return None
+
+    @staticmethod
+    def _score_decoded_html(text: str) -> tuple[int, int, int]:
+        japanese_chars = sum(
+            1
+            for char in text
+            if (
+                "\u3040" <= char <= "\u30ff"
+                or "\u3400" <= char <= "\u9fff"
+                or "\uff01" <= char <= "\uff60"
+            )
+        )
+        replacement_chars = text.count("\ufffd")
+        suspicious_chars = sum(1 for char in text if "\u0080" <= char <= "\u00ff")
+        return (japanese_chars, -replacement_chars, -suspicious_chars)
+
+    def _decode_html_response(self, response: requests.Response) -> str:
+        raw_bytes = getattr(response, "content", b"") or b""
+        if not raw_bytes:
+            return response.text
+
+        candidates: list[str] = []
+        meta_charset = self._extract_meta_charset(raw_bytes)
+        header_charset = get_encoding_from_headers(getattr(response, "headers", {}) or {})
+        apparent_charset = getattr(response, "apparent_encoding", None)
+        dammit = UnicodeDammit(raw_bytes, is_html=True)
+
+        for encoding in (
+            meta_charset,
+            apparent_charset,
+            "utf-8",
+            dammit.original_encoding,
+            header_charset,
+            "cp932",
+            "shift_jis",
+        ):
+            if not encoding:
+                continue
+            normalized = encoding.lower()
+            if normalized not in candidates:
+                candidates.append(normalized)
+
+        best_text: str | None = None
+        best_score: tuple[int, int, int] | None = None
+        for encoding in candidates:
+            try:
+                decoded = raw_bytes.decode(encoding)
+            except (LookupError, UnicodeDecodeError):
+                continue
+            score = self._score_decoded_html(decoded)
+            if best_score is None or score > best_score:
+                best_text = decoded
+                best_score = score
+
+        if best_text is not None:
+            return best_text
+        return raw_bytes.decode("utf-8", errors="replace")
 
     def _build_dates(self) -> list[date]:
         if self.target_date and (self.date_from or self.date_to):
