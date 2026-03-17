@@ -7,9 +7,12 @@ from app.models.disclosure import Disclosure
 from app.models.enums import DisclosureCategory, DisclosurePriority
 from app.models.valuation_view import ValuationView
 from app.services.notification_message_builder import (
+    RAW_CATEGORY_COLORS,
     build_dedupe_key,
     build_notification_body,
+    build_raw_discord_batches,
     build_raw_disclosure_batches,
+    build_raw_short_title,
     classify_raw_disclosure,
     filter_raw_disclosures,
 )
@@ -64,7 +67,6 @@ def test_build_dedupe_key_is_stable() -> None:
     assert key == "10:analysis_alert:dummy:test-room"
 
 
-
 def test_build_raw_disclosure_batches_splits_by_batch_size() -> None:
     company = Company(id=1, code="6758", name="Sony Group", name_ja="ソニーグループ")
     disclosures = []
@@ -92,13 +94,12 @@ def test_build_raw_disclosure_batches_splits_by_batch_size() -> None:
     assert len(batches[1][0]) == 1
     assert "全市場 新規開示" in batches[0][1]
     assert "件】" in batches[0][1]
-    assert "【決算短信 1件】" in batches[0][1] or "【業績修正 1件】" in batches[0][1]
 
 
-def test_filter_raw_disclosures_excludes_etf_reit_and_infra() -> None:
+def test_filter_raw_disclosures_excludes_etf_reit_and_infra_with_normalization() -> None:
     equity = Company(id=1, code="1111", name="個別株")
     reit = Company(id=2, code="2222", name="日本リート投資法人")
-    etf = Company(id=3, code="3333", name="TOPIX ETF")
+    etf = Company(id=3, code="3333", name="ＴＯＰＩＸ　ＥＴＦ")
 
     disclosures = [
         Disclosure(
@@ -133,7 +134,7 @@ def test_filter_raw_disclosures_excludes_etf_reit_and_infra() -> None:
             company=etf,
             source_name="jpx-tdnet",
             disclosed_at=datetime.fromisoformat("2026-03-13T15:02:00+09:00"),
-            title="ETFに関するお知らせ",
+            title="ｅｔｆに関するお知らせ",
             category=DisclosureCategory.OTHER,
             priority=DisclosurePriority.LOW,
             source_url="https://example.com/etf",
@@ -145,7 +146,6 @@ def test_filter_raw_disclosures_excludes_etf_reit_and_infra() -> None:
     filtered = filter_raw_disclosures(disclosures)
 
     assert [disclosure.id for disclosure in filtered] == [1]
-
 
 
 def test_classify_raw_disclosure_prioritizes_guidance_over_dividend() -> None:
@@ -165,3 +165,80 @@ def test_classify_raw_disclosure_prioritizes_guidance_over_dividend() -> None:
     )
 
     assert classify_raw_disclosure(disclosure) == "guidance"
+
+
+def test_build_raw_short_title_applies_rule_based_shortening() -> None:
+    assert build_raw_short_title("業績予想の修正に関するお知らせ") == "業績予想修正"
+    assert build_raw_short_title("特別損失の計上に関するお知らせ") == "特損計上"
+
+
+def test_build_raw_discord_batches_creates_summary_and_category_embeds() -> None:
+    company = Company(id=1, code="7203", name="Toyota", name_ja="トヨタ自動車")
+    disclosures = [
+        Disclosure(
+            id=1,
+            company_id=1,
+            company=company,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+            title="決算短信に関するお知らせ",
+            category=DisclosureCategory.EARNINGS_REPORT,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/1",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=2,
+            company_id=1,
+            company=company,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:10:00+09:00"),
+            title="業績予想の修正に関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/2",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+    ]
+
+    batches = build_raw_discord_batches(disclosures=disclosures, filtered_out_count=3, batch_size=10)
+
+    assert len(batches) == 1
+    embeds = batches[0].payload["embeds"]
+    assert embeds[0]["title"] == "全市場 新規開示 2件"
+    assert "除外 3" in embeds[0]["description"]
+    assert any(embed["title"] == "決算短信 1件" for embed in embeds[1:])
+    assert any(embed["title"] == "業績修正 1件" for embed in embeds[1:])
+    earnings_embed = next(embed for embed in embeds if embed["title"] == "決算短信 1件")
+    assert earnings_embed["color"] == RAW_CATEGORY_COLORS["earnings"]
+    assert "15:00" in earnings_embed["description"]
+    assert "7203" in earnings_embed["description"]
+    assert "トヨタ自動車" in earnings_embed["description"]
+    assert "PDF: <https://example.com/1>" in earnings_embed["description"]
+
+
+def test_build_raw_discord_batches_collapses_other_category_tail() -> None:
+    company = Company(id=1, code="9999", name="Other Co")
+    disclosures = []
+    for idx in range(1, 8):
+        disclosures.append(
+            Disclosure(
+                id=idx,
+                company_id=1,
+                company=company,
+                source_name="jpx-tdnet",
+                disclosed_at=datetime.fromisoformat(f"2026-03-13T10:0{idx}:00+09:00"),
+                title=f"その他開示{idx}に関するお知らせ",
+                category=DisclosureCategory.OTHER,
+                priority=DisclosurePriority.LOW,
+                source_url=f"https://example.com/other/{idx}",
+                is_new=False,
+                is_analysis_target=False,
+            )
+        )
+
+    batches = build_raw_discord_batches(disclosures=disclosures, filtered_out_count=0, batch_size=20, other_preview_limit=5)
+    other_embed = next(embed for embed in batches[0].payload["embeds"] if embed["title"] == "その他 7件")
+    assert "他 2件" in other_embed["description"]

@@ -1204,12 +1204,18 @@ Behavior:
 - raw notifications are sent for disclosures that are newly ingested within the configured lookback window, or for a replay date supplied to `run_raw_notifications`
 - each disclosure still gets its own dedupe key in the `notifications` table
 - categories are rendered in this order: 決算短信 / 業績修正 / 配当修正 / その他
+- raw Discord notifications use embed payloads for mobile readability
+- the first embed is a summary block such as `決算短信 4 / 業績修正 7 / 配当修正 5 / その他 15 / 除外 22`
+- category embeds are color-coded: 決算短信=青 / 業績修正=オレンジ / 配当修正=緑 / その他=グレー
 - each category header includes a count, for example `【業績修正 12件】`
-- if one title implies both guidance revision and dividend revision, it is shown under 業績修正 first
+- each item is shortened to two lines: `時刻 / コード / 会社名` and a rule-based short title
+- URLs are separated as `PDF: <...>` instead of being appended directly to the title line
+- `その他` can be collapsed to a preview plus `他 xx件`
+- if one title implies both guidance revision and dividend revision, it is classified as 業績修正 but still displayed in the standard category order
 - reruns do not resend the same disclosure because dedupe is based on `notification_type=raw_disclosure_batch` plus disclosure/channel/destination
 - normal cron operation uses `created_at` lookback; replay uses `--date YYYY-MM-DD`
 - `--dry-run` previews candidate counts without sending, and `--force` intentionally resends the selected set
-- sending is grouped into batches and split again if the Discord message body would grow too large
+- sending is grouped into batches and split again if the Discord message body or embed groups would grow too large
 
 Manual commands:
 
@@ -1238,3 +1244,4 @@ Lightsail rollout:
 cd /srv/disclosure-fundamental-mvp
 .venv/bin/python -m scripts.run_raw_notifications
 ```
+

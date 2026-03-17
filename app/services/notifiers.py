@@ -18,6 +18,10 @@ class DummyNotifier:
     def send(self, destination: str, body: str) -> NotificationSendResult:
         return NotificationSendResult(external_message_id=f"dummy:{destination}:{len(body)}")
 
+    def send_payload(self, destination: str, payload: dict[str, object]) -> NotificationSendResult:
+        body = json.dumps(payload, ensure_ascii=False)
+        return NotificationSendResult(external_message_id=f"dummy:{destination}:{len(body)}")
+
 
 class TelegramNotifier:
     def __init__(self) -> None:
@@ -51,9 +55,12 @@ class DiscordNotifier:
             raise ValueError("DISCORD_WEBHOOK_URL is required for discord notifications.")
 
     def send(self, destination: str, body: str) -> NotificationSendResult:
+        return self.send_payload(destination, {"content": body})
+
+    def send_payload(self, destination: str, payload: dict[str, object]) -> NotificationSendResult:
         response = requests.post(
             self.webhook_url,
-            json={"content": body},
+            json=payload,
             timeout=30,
         )
         response.raise_for_status()

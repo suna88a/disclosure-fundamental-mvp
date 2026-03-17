@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import unicodedata
+from dataclasses import dataclass
+
 from app.models.analysis_result import AnalysisResult
 from app.models.disclosure import Disclosure
 from app.models.enums import DisclosureCategory
@@ -8,6 +11,7 @@ from app.models.valuation_view import ValuationView
 from app.services.disclosure_view_service import category_label, company_display_name, format_score, format_datetime
 
 DISCORD_MESSAGE_LIMIT = 1800
+DISCORD_EMBED_DESCRIPTION_LIMIT = 3500
 RAW_CLASSIFICATION_PRIORITY = ["guidance", "dividend", "earnings", "other"]
 RAW_DISPLAY_ORDER = ["earnings", "guidance", "dividend", "other"]
 RAW_CATEGORY_LABELS = {
@@ -15,6 +19,13 @@ RAW_CATEGORY_LABELS = {
     "guidance": "業績修正",
     "dividend": "配当修正",
     "other": "その他",
+}
+RAW_CATEGORY_COLORS = {
+    "earnings": 0x3498DB,
+    "guidance": 0xE67E22,
+    "dividend": 0x2ECC71,
+    "other": 0x95A5A6,
+    "summary": 0x34495E,
 }
 RAW_EQUITY_EXCLUDE_KEYWORDS = (
     "ETF",
@@ -27,6 +38,24 @@ RAW_EQUITY_EXCLUDE_KEYWORDS = (
     "上場投信",
     "上場インデックスファンド",
 )
+RAW_OTHER_PREVIEW_LIMIT = 5
+RAW_SHORT_TITLE_REPLACEMENTS = (
+    ("業績予想及び配当予想の修正", "業績予想・配当予想修正"),
+    ("業績予想および配当予想の修正", "業績予想・配当予想修正"),
+    ("連結業績予想の修正", "連結業績予想修正"),
+    ("通期業績予想の修正", "通期業績予想修正"),
+    ("業績予想の修正", "業績予想修正"),
+    ("配当予想の修正", "配当予想修正"),
+    ("特別損失の計上", "特損計上"),
+    ("特別利益の計上", "特益計上"),
+    ("初配当", "初配"),
+)
+
+
+@dataclass(frozen=True)
+class RawDiscordBatch:
+    disclosures: list[Disclosure]
+    payload: dict[str, object]
 
 
 def build_notification_body(
@@ -90,6 +119,39 @@ def build_raw_disclosure_batches(
     return batches
 
 
+def build_raw_discord_batches(
+    *,
+    disclosures: list[Disclosure],
+    filtered_out_count: int,
+    batch_size: int,
+    other_preview_limit: int = RAW_OTHER_PREVIEW_LIMIT,
+) -> list[RawDiscordBatch]:
+    if batch_size < 1:
+        batch_size = 1
+
+    eligible = sort_raw_disclosures(filter_raw_disclosures(disclosures))
+    if not eligible:
+        return []
+
+    chunks = [eligible[index : index + batch_size] for index in range(0, len(eligible), batch_size)]
+    total_counts = _raw_category_counts(eligible)
+    batches: list[RawDiscordBatch] = []
+
+    for index, chunk in enumerate(chunks):
+        embeds: list[dict[str, object]] = []
+        if index == 0:
+            embeds.append(
+                _build_raw_summary_embed(
+                    eligible_count=len(eligible),
+                    filtered_out_count=filtered_out_count,
+                    category_counts=total_counts,
+                )
+            )
+        embeds.extend(_build_raw_category_embeds(chunk, other_preview_limit=other_preview_limit))
+        batches.append(RawDiscordBatch(disclosures=chunk, payload={"embeds": embeds}))
+    return batches
+
+
 def filter_raw_disclosures(disclosures: list[Disclosure]) -> list[Disclosure]:
     return [disclosure for disclosure in disclosures if _is_raw_equity_candidate(disclosure)]
 
@@ -127,6 +189,17 @@ def build_dedupe_key(
     return f"{disclosure_id}:{notification_type}:{channel}:{destination}"
 
 
+def build_raw_short_title(title: str) -> str:
+    shortened = unicodedata.normalize("NFKC", title).strip()
+    for old, new in RAW_SHORT_TITLE_REPLACEMENTS:
+        shortened = shortened.replace(old, new)
+    for suffix in ("に関するお知らせ", "のお知らせ"):
+        if shortened.endswith(suffix):
+            shortened = shortened[: -len(suffix)]
+    shortened = shortened.strip(" 　-")
+    return _truncate_text(shortened or title, 48)
+
+
 def _valuation_line(valuation: ValuationView | None) -> str:
     if valuation is None:
         return "見立て: 評価見直しの仮説はまだ生成されていません。"
@@ -139,9 +212,13 @@ def _valuation_line(valuation: ValuationView | None) -> str:
     return "見立て: 材料が限られるため、評価見直しは保守的に見ています。"
 
 
+def _normalize_raw_text(value: str) -> str:
+    return unicodedata.normalize("NFKC", value).upper().replace(" ", "").replace("　", "")
+
+
 def _is_raw_equity_candidate(disclosure: Disclosure) -> bool:
-    combined = " ".join(filter(None, [company_display_name(disclosure.company), disclosure.company.name, disclosure.title])).upper()
-    return not any(keyword.upper() in combined for keyword in RAW_EQUITY_EXCLUDE_KEYWORDS)
+    combined = _normalize_raw_text(" ".join(filter(None, [company_display_name(disclosure.company), disclosure.company.name, disclosure.title])))
+    return not any(_normalize_raw_text(keyword) in combined for keyword in RAW_EQUITY_EXCLUDE_KEYWORDS)
 
 
 def _build_raw_disclosure_block(disclosure: Disclosure) -> str:
@@ -160,6 +237,82 @@ def _render_raw_disclosure_batch(disclosures: list[Disclosure]) -> str:
         blocks = "\n".join(_build_raw_disclosure_block(disclosure) for disclosure in items)
         sections.append(f"【{RAW_CATEGORY_LABELS[category]} {len(items)}件】\n{blocks}")
     return f"【全市場 新規開示】{len(disclosures)}件\n\n" + "\n\n".join(sections)
+
+
+def _raw_category_counts(disclosures: list[Disclosure]) -> dict[str, int]:
+    counts = {category: 0 for category in RAW_DISPLAY_ORDER}
+    for disclosure in disclosures:
+        counts[classify_raw_disclosure(disclosure)] += 1
+    return counts
+
+
+def _build_raw_summary_embed(
+    *,
+    eligible_count: int,
+    filtered_out_count: int,
+    category_counts: dict[str, int],
+) -> dict[str, object]:
+    summary = " / ".join(
+        [
+            f"{RAW_CATEGORY_LABELS['earnings']} {category_counts['earnings']}",
+            f"{RAW_CATEGORY_LABELS['guidance']} {category_counts['guidance']}",
+            f"{RAW_CATEGORY_LABELS['dividend']} {category_counts['dividend']}",
+            f"{RAW_CATEGORY_LABELS['other']} {category_counts['other']}",
+            f"除外 {filtered_out_count}",
+        ]
+    )
+    return {
+        "title": f"全市場 新規開示 {eligible_count}件",
+        "description": summary,
+        "color": RAW_CATEGORY_COLORS['summary'],
+    }
+
+
+def _build_raw_category_embeds(
+    disclosures: list[Disclosure],
+    *,
+    other_preview_limit: int,
+) -> list[dict[str, object]]:
+    embeds: list[dict[str, object]] = []
+    for category in RAW_DISPLAY_ORDER:
+        items = [disclosure for disclosure in disclosures if classify_raw_disclosure(disclosure) == category]
+        if not items:
+            continue
+        description = _build_raw_category_description(category, items, other_preview_limit=other_preview_limit)
+        embeds.append(
+            {
+                "title": f"{RAW_CATEGORY_LABELS[category]} {len(items)}件",
+                "description": _truncate_text(description, DISCORD_EMBED_DESCRIPTION_LIMIT),
+                "color": RAW_CATEGORY_COLORS[category],
+            }
+        )
+    return embeds
+
+
+def _build_raw_category_description(
+    category: str,
+    disclosures: list[Disclosure],
+    *,
+    other_preview_limit: int,
+) -> str:
+    visible_items = disclosures
+    hidden_count = 0
+    if category == "other" and len(disclosures) > other_preview_limit:
+        visible_items = disclosures[:other_preview_limit]
+        hidden_count = len(disclosures) - len(visible_items)
+
+    blocks = [_build_raw_embed_block(disclosure) for disclosure in visible_items]
+    if hidden_count:
+        blocks.append(f"他 {hidden_count}件")
+    return "\n\n".join(blocks)
+
+
+def _build_raw_embed_block(disclosure: Disclosure) -> str:
+    timestamp = format_datetime(disclosure.disclosed_at)
+    company_name = company_display_name(disclosure.company)
+    line1 = f"{timestamp} / {disclosure.company.code} / {company_name}"
+    line2 = build_raw_short_title(disclosure.title)
+    return f"{line1}\n{line2}\nPDF: <{disclosure.source_url}>"
 
 
 def _truncate_text(value: str, limit: int) -> str:

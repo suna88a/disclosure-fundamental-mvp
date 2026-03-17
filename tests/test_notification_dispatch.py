@@ -82,7 +82,6 @@ def test_dispatch_notifications_sends_once_and_persists_log(monkeypatch) -> None
     assert notifications[0].status == NotificationStatus.SENT
 
 
-
 def test_dispatch_notifications_skips_inactive_company(monkeypatch) -> None:
     monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
     monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
@@ -124,7 +123,6 @@ def test_dispatch_notifications_skips_inactive_company(monkeypatch) -> None:
 
     assert result["processed"] == 0
     assert session.scalar(select(Notification)) is None
-
 
 
 def test_dispatch_notifications_uses_discord_channel(monkeypatch) -> None:
@@ -189,7 +187,6 @@ def test_dispatch_notifications_uses_discord_channel(monkeypatch) -> None:
     assert notification.channel.value == "discord"
 
 
-
 def test_dispatch_notifications_requires_discord_webhook_url(monkeypatch) -> None:
     monkeypatch.setenv("NOTIFICATION_CHANNEL", "discord")
     monkeypatch.setenv("NOTIFICATION_DESTINATION", "discord-room")
@@ -205,7 +202,6 @@ def test_dispatch_notifications_requires_discord_webhook_url(monkeypatch) -> Non
         assert "DISCORD_WEBHOOK_URL" in str(exc)
     else:
         raise AssertionError("Expected ValueError when DISCORD_WEBHOOK_URL is missing.")
-
 
 
 def test_dispatch_raw_notifications_batches_and_dedupes(monkeypatch) -> None:
@@ -267,7 +263,6 @@ def test_dispatch_raw_notifications_batches_and_dedupes(monkeypatch) -> None:
     assert "https://example.com/raw/2" in combined_bodies
     assert "https://example.com/raw/3" in combined_bodies
     assert len(notifications) == 3
-
 
 
 def test_dispatch_raw_notifications_can_backfill_one_day(monkeypatch) -> None:
@@ -335,7 +330,6 @@ def test_dispatch_raw_notifications_can_backfill_one_day(monkeypatch) -> None:
     assert "https://example.com/replay/c" not in sent_payloads[0]
 
 
-
 def test_dispatch_raw_notifications_supports_dry_run(monkeypatch) -> None:
     monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
     monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
@@ -369,7 +363,6 @@ def test_dispatch_raw_notifications_supports_dry_run(monkeypatch) -> None:
     assert result["dry_run"] == 1
     assert result["batch_count"] == 1
     assert session.scalar(select(Notification).where(Notification.notification_type == NotificationType.RAW_DISCLOSURE_BATCH)) is None
-
 
 
 def test_dispatch_raw_notifications_supports_force_resend(monkeypatch) -> None:
@@ -416,7 +409,6 @@ def test_dispatch_raw_notifications_supports_force_resend(monkeypatch) -> None:
     assert session.scalars(select(Notification).where(Notification.notification_type == NotificationType.RAW_DISCLOSURE_BATCH)).all()
 
 
-
 def test_dispatch_raw_notifications_force_requires_date(monkeypatch) -> None:
     monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
     monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
@@ -430,7 +422,6 @@ def test_dispatch_raw_notifications_force_requires_date(monkeypatch) -> None:
         assert "requires --date" in str(exc)
     else:
         raise AssertionError("Expected ValueError when --force is used without --date.")
-
 
 
 def test_dispatch_raw_notifications_requires_discord_webhook(monkeypatch) -> None:
@@ -447,3 +438,48 @@ def test_dispatch_raw_notifications_requires_discord_webhook(monkeypatch) -> Non
         assert "DISCORD_WEBHOOK_URL" in str(exc)
     else:
         raise AssertionError("Expected ValueError when RAW_DISCORD_WEBHOOK_URL is missing.")
+
+
+def test_dispatch_raw_notifications_uses_discord_embeds(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "discord")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "discord-raw")
+    monkeypatch.setenv("RAW_DISCORD_WEBHOOK_URL", "https://discord.example/raw")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    get_settings.cache_clear()
+
+    sent_payloads: list[tuple[str, dict[str, object]]] = []
+
+    def fake_send_payload(self, destination: str, payload: dict[str, object]) -> NotificationSendResult:
+        sent_payloads.append((destination, payload))
+        return NotificationSendResult(external_message_id=f"discord-raw-{len(sent_payloads)}")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DiscordNotifier.send_payload", fake_send_payload)
+
+    session = _build_session()
+    company = Company(code="7203", name="Toyota", name_ja="トヨタ自動車")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="jpx-tdnet",
+        disclosed_at=datetime.fromisoformat("2026-03-17T09:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.OTHER,
+        priority=DisclosurePriority.LOW,
+        source_url="https://example.com/raw-discord",
+        is_new=False,
+        is_analysis_target=False,
+    )
+    session.add(disclosure)
+    session.flush()
+    disclosure.created_at = datetime.now(disclosure.created_at.tzinfo) - timedelta(minutes=5)
+    session.commit()
+
+    result = dispatch_raw_disclosure_notifications(session)
+
+    assert result["sent"] == 1
+    assert result["messages_sent"] == 1
+    assert sent_payloads[0][0] == "discord-raw"
+    embeds = sent_payloads[0][1]["embeds"]
+    assert embeds[0]["title"].startswith("全市場 新規開示")
+    assert any(embed["title"] == "業績修正 1件" for embed in embeds[1:])

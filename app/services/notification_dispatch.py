@@ -17,6 +17,7 @@ from app.services.notification_message_builder import (
     build_dedupe_key,
     build_notification_body,
     build_raw_disclosure_batches,
+    build_raw_discord_batches,
     filter_raw_disclosures,
 )
 from app.services.notifiers import DiscordNotifier, DummyNotifier, TelegramNotifier
@@ -157,107 +158,179 @@ def dispatch_raw_disclosure_notifications(
         pending_disclosures.append(disclosure)
 
     if not pending_disclosures:
-        result = {
-            "mode": mode,
-            "target_date": target_date.isoformat() if target_date else None,
-            "lookback_minutes": effective_lookback_minutes,
-            "processed": processed,
-            "filtered_out": filtered_out,
-            "candidates": 0,
-            "skipped": skipped,
-            "sent": 0,
-            "failed": 0,
-            "messages_sent": 0,
-            "forced": int(force),
-            "dry_run": int(dry_run),
-        }
-        logger.info("raw_notification mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s", mode, result["target_date"], effective_lookback_minutes, processed, filtered_out, 0, skipped, 0, 0, int(force))
+        result = _raw_result(
+            mode=mode,
+            target_date=target_date,
+            lookback_minutes=effective_lookback_minutes,
+            processed=processed,
+            filtered_out=filtered_out,
+            candidates=0,
+            skipped=skipped,
+            sent=0,
+            failed=0,
+            messages_sent=0,
+            forced=force,
+            dry_run=dry_run,
+        )
+        _log_raw_result(result)
         return result
 
-    batches = build_raw_disclosure_batches(
-        disclosures=pending_disclosures,
-        batch_size=settings.raw_notification_batch_size,
-    )
-    messages_sent = 0
-    candidate_count = sum(len(disclosures_in_batch) for disclosures_in_batch, _ in batches)
+    if channel == NotificationChannel.DISCORD:
+        discord_batches = build_raw_discord_batches(
+            disclosures=pending_disclosures,
+            filtered_out_count=filtered_out,
+            batch_size=settings.raw_notification_batch_size,
+        )
+        candidate_count = sum(len(batch.disclosures) for batch in discord_batches)
+        batch_count = len(discord_batches)
+        messages_sent = 0
 
-    if dry_run:
-        result = {
-            "mode": mode,
-            "target_date": target_date.isoformat() if target_date else None,
-            "lookback_minutes": effective_lookback_minutes,
-            "processed": processed,
-            "filtered_out": filtered_out,
-            "candidates": candidate_count,
-            "skipped": skipped,
-            "sent": 0,
-            "failed": 0,
-            "messages_sent": 0,
-            "forced": int(force),
-            "dry_run": 1,
-            "batch_count": len(batches),
-            "batched_disclosures": candidate_count,
-        }
-        logger.info("raw_notification mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s", mode, result["target_date"], effective_lookback_minutes, processed, filtered_out, candidate_count, skipped, 0, 0, int(force))
-        return result
-
-    force_note = "\n\n[FORCED REPLAY]" if force else ""
-    for disclosures_in_batch, body in batches:
-        notifications = []
-        persist_notifications = not force
-        for disclosure in disclosures_in_batch:
-            if not persist_notifications:
-                continue
-            dedupe_key = build_dedupe_key(
-                disclosure_id=disclosure.id,
-                notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
-                channel=channel.value,
-                destination=destination,
+        if dry_run:
+            result = _raw_result(
+                mode=mode,
+                target_date=target_date,
+                lookback_minutes=effective_lookback_minutes,
+                processed=processed,
+                filtered_out=filtered_out,
+                candidates=candidate_count,
+                skipped=skipped,
+                sent=0,
+                failed=0,
+                messages_sent=0,
+                forced=force,
+                dry_run=True,
+                batch_count=batch_count,
+                batched_disclosures=candidate_count,
             )
-            notifications.append(
-                repository.create_pending(
+            _log_raw_result(result)
+            return result
+
+        for batch in discord_batches:
+            notifications = []
+            persist_notifications = not force
+            for disclosure in batch.disclosures:
+                if not persist_notifications:
+                    continue
+                dedupe_key = build_dedupe_key(
                     disclosure_id=disclosure.id,
-                    notification_type=NotificationType.RAW_DISCLOSURE_BATCH,
-                    channel=channel,
+                    notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
+                    channel=channel.value,
                     destination=destination,
-                    dedupe_key=dedupe_key,
-                    body=body,
                 )
+                notifications.append(
+                    repository.create_pending(
+                        disclosure_id=disclosure.id,
+                        notification_type=NotificationType.RAW_DISCLOSURE_BATCH,
+                        channel=channel,
+                        destination=destination,
+                        dedupe_key=dedupe_key,
+                        body="raw-discord-embed",
+                    )
+                )
+            try:
+                result = notifier.send_payload(destination, batch.payload)
+                messages_sent += 1
+                if notifications:
+                    for notification in notifications:
+                        repository.mark_sent(notification, result.external_message_id)
+                        sent += 1
+                else:
+                    sent += len(batch.disclosures)
+            except Exception as exc:
+                if notifications:
+                    for notification in notifications:
+                        repository.mark_failed(notification, str(exc))
+                        failed += 1
+                else:
+                    failed += len(batch.disclosures)
+            else:
+                pass
+    else:
+        batches = build_raw_disclosure_batches(
+            disclosures=pending_disclosures,
+            batch_size=settings.raw_notification_batch_size,
+        )
+        candidate_count = sum(len(disclosures_in_batch) for disclosures_in_batch, _ in batches)
+        batch_count = len(batches)
+
+        if dry_run:
+            result = _raw_result(
+                mode=mode,
+                target_date=target_date,
+                lookback_minutes=effective_lookback_minutes,
+                processed=processed,
+                filtered_out=filtered_out,
+                candidates=candidate_count,
+                skipped=skipped,
+                sent=0,
+                failed=0,
+                messages_sent=0,
+                forced=force,
+                dry_run=True,
+                batch_count=batch_count,
+                batched_disclosures=candidate_count,
             )
-        try:
-            result = notifier.send(destination, body + force_note)
-            messages_sent += 1
-            if notifications:
-                for notification in notifications:
-                    repository.mark_sent(notification, result.external_message_id)
-                    sent += 1
-            else:
-                sent += len(disclosures_in_batch)
-        except Exception as exc:
-            if notifications:
-                for notification in notifications:
-                    repository.mark_failed(notification, str(exc))
-                    failed += 1
-            else:
-                failed += len(disclosures_in_batch)
+            _log_raw_result(result)
+            return result
+
+        force_note = "\n\n[FORCED REPLAY]" if force else ""
+        messages_sent = 0
+        for disclosures_in_batch, body in batches:
+            notifications = []
+            persist_notifications = not force
+            for disclosure in disclosures_in_batch:
+                if not persist_notifications:
+                    continue
+                dedupe_key = build_dedupe_key(
+                    disclosure_id=disclosure.id,
+                    notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
+                    channel=channel.value,
+                    destination=destination,
+                )
+                notifications.append(
+                    repository.create_pending(
+                        disclosure_id=disclosure.id,
+                        notification_type=NotificationType.RAW_DISCLOSURE_BATCH,
+                        channel=channel,
+                        destination=destination,
+                        dedupe_key=dedupe_key,
+                        body=body,
+                    )
+                )
+            try:
+                result = notifier.send(destination, body + force_note)
+                messages_sent += 1
+                if notifications:
+                    for notification in notifications:
+                        repository.mark_sent(notification, result.external_message_id)
+                        sent += 1
+                else:
+                    sent += len(disclosures_in_batch)
+            except Exception as exc:
+                if notifications:
+                    for notification in notifications:
+                        repository.mark_failed(notification, str(exc))
+                        failed += 1
+                else:
+                    failed += len(disclosures_in_batch)
 
     session.flush()
     session.expire_all()
-    result = {
-        "mode": mode,
-        "target_date": target_date.isoformat() if target_date else None,
-        "lookback_minutes": effective_lookback_minutes,
-        "processed": processed,
-        "filtered_out": filtered_out,
-        "candidates": candidate_count,
-        "skipped": skipped,
-        "sent": sent,
-        "failed": failed,
-        "messages_sent": messages_sent,
-        "forced": int(force),
-        "dry_run": 0,
-    }
-    logger.info("raw_notification mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s", mode, result["target_date"], effective_lookback_minutes, processed, filtered_out, candidate_count, skipped, sent, messages_sent, int(force))
+    result = _raw_result(
+        mode=mode,
+        target_date=target_date,
+        lookback_minutes=effective_lookback_minutes,
+        processed=processed,
+        filtered_out=filtered_out,
+        candidates=len(pending_disclosures),
+        skipped=skipped,
+        sent=sent,
+        failed=failed,
+        messages_sent=messages_sent,
+        forced=force,
+        dry_run=False,
+    )
+    _log_raw_result(result)
     return result
 
 
@@ -304,3 +377,60 @@ def _resolve_destination(
     if channel == NotificationChannel.DISCORD:
         return configured_destination or "discord-webhook"
     return configured_destination
+
+
+
+def _raw_result(
+    *,
+    mode: str,
+    target_date: date | None,
+    lookback_minutes: int,
+    processed: int,
+    filtered_out: int,
+    candidates: int,
+    skipped: int,
+    sent: int,
+    failed: int,
+    messages_sent: int,
+    forced: bool,
+    dry_run: bool,
+    batch_count: int | None = None,
+    batched_disclosures: int | None = None,
+) -> dict[str, int | str | None]:
+    result: dict[str, int | str | None] = {
+        "mode": mode,
+        "target_date": target_date.isoformat() if target_date else None,
+        "lookback_minutes": lookback_minutes,
+        "processed": processed,
+        "filtered_out": filtered_out,
+        "candidates": candidates,
+        "skipped": skipped,
+        "sent": sent,
+        "failed": failed,
+        "messages_sent": messages_sent,
+        "forced": int(forced),
+        "dry_run": int(dry_run),
+    }
+    if batch_count is not None:
+        result["batch_count"] = batch_count
+    if batched_disclosures is not None:
+        result["batched_disclosures"] = batched_disclosures
+    return result
+
+
+
+def _log_raw_result(result: dict[str, int | str | None]) -> None:
+    logger.info(
+        "raw_notification mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s",
+        result.get("mode"),
+        result.get("target_date"),
+        result.get("lookback_minutes"),
+        result.get("processed"),
+        result.get("filtered_out"),
+        result.get("candidates"),
+        result.get("skipped"),
+        result.get("sent"),
+        result.get("messages_sent"),
+        result.get("forced"),
+    )
+
