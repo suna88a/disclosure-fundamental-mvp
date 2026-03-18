@@ -981,6 +981,7 @@ For weekly maintenance on a small VPS:
 - `valuation_views` is generated from `analysis_results` as a conservative hypothesis layer, not as a price-screening or price-prediction feature.
 - Notifications use `disclosure_id + notification_type + channel + destination` as the dedupe key.
 - `notifications.notification_type`, `channel`, and `status` are stored using enum `.value` strings such as `raw_disclosure_batch`, `discord`, and `sent`.
+- Notification writes and dedupe keys should always use `.value`, not `.name`, to avoid legacy uppercase values such as `RAW_DISCLOSURE_BATCH`.
 - The primary notification path continues to use `should_notify` based analysis alerts.
 - A secondary raw-market notification path can batch newly fetched disclosures to a separate Discord webhook every pipeline run.
 - UI currently exposes two lightweight server-rendered pages: `/disclosures` and `/disclosures/{id}`. The notification detail URL should point to `/disclosures/{id}`.

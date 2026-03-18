@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.enums import NotificationChannel, NotificationStatus, NotificationType
+from app.models.enums import NotificationStatus
 from app.models.notification import Notification
 
 
@@ -18,8 +18,8 @@ class NotificationRepository:
         self,
         *,
         disclosure_id: int,
-        notification_type: NotificationType,
-        channel: NotificationChannel,
+        notification_type: str,
+        channel: str,
         destination: str,
         dedupe_key: str,
         body: str,
@@ -31,14 +31,14 @@ class NotificationRepository:
             destination=destination,
             dedupe_key=dedupe_key,
             body=body,
-            status=NotificationStatus.PENDING,
+            status=NotificationStatus.PENDING.value,
         )
         self.session.add(notification)
         self.session.flush()
         return notification
 
     def mark_sent(self, notification: Notification, external_message_id: str | None) -> None:
-        notification.status = NotificationStatus.SENT
+        notification.status = NotificationStatus.SENT.value
         notification.external_message_id = external_message_id
         notification.error_message = None
         notification.sent_at = datetime.now(UTC)
@@ -46,7 +46,7 @@ class NotificationRepository:
         self.session.flush()
 
     def mark_failed(self, notification: Notification, error_message: str) -> None:
-        notification.status = NotificationStatus.FAILED
+        notification.status = NotificationStatus.FAILED.value
         notification.error_message = error_message
         self.session.add(notification)
         self.session.flush()

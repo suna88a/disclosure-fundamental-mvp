@@ -82,8 +82,8 @@ def dispatch_notifications(session: Session) -> dict[str, int]:
         )
         notification = repository.create_pending(
             disclosure_id=disclosure.id,
-            notification_type=NotificationType.ANALYSIS_ALERT,
-            channel=channel,
+            notification_type=NotificationType.ANALYSIS_ALERT.value,
+            channel=channel.value,
             destination=destination,
             dedupe_key=dedupe_key,
             body=body,
@@ -220,8 +220,8 @@ def dispatch_raw_disclosure_notifications(
                 notifications.append(
                     repository.create_pending(
                         disclosure_id=disclosure.id,
-                        notification_type=NotificationType.RAW_DISCLOSURE_BATCH,
-                        channel=channel,
+                        notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
+                        channel=channel.value,
                         destination=destination,
                         dedupe_key=dedupe_key,
                         body="raw-discord-embed",
@@ -290,8 +290,8 @@ def dispatch_raw_disclosure_notifications(
                 notifications.append(
                     repository.create_pending(
                         disclosure_id=disclosure.id,
-                        notification_type=NotificationType.RAW_DISCLOSURE_BATCH,
-                        channel=channel,
+                        notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
+                        channel=channel.value,
                         destination=destination,
                         dedupe_key=dedupe_key,
                         body=body,

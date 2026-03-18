@@ -50,8 +50,8 @@ def test_notification_repository_persists_enum_values() -> None:
 
     repository.create_pending(
         disclosure_id=disclosure.id,
-        notification_type=NotificationType.RAW_DISCLOSURE_BATCH,
-        channel=NotificationChannel.DISCORD,
+        notification_type=NotificationType.RAW_DISCLOSURE_BATCH.value,
+        channel=NotificationChannel.DISCORD.value,
         destination="raw-room",
         dedupe_key="1:raw_disclosure_batch:discord:raw-room",
         body="body",
