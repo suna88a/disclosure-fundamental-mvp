@@ -1215,7 +1215,7 @@ Behavior:
   - increase / decrease / initial / resume / no dividend -> short Japanese labels such as `増配を発表`, `初配を発表`
   - special loss / gain, buyback, medium-term plan, alliance -> compact summaries such as `特損を計上`, `自己株取得を発表`, `中計を公表`, `提携を発表`
 - URLs are separated as `PDF: <...>` instead of being appended directly to the title line
-- `その他` can be collapsed to a preview plus `他 xx件`
+- all categories, including `その他`, are shown in full; if one category is too large it is split across multiple embeds such as `その他 17件(1/2)`
 - if one title implies both guidance revision and dividend revision, it is classified as 業績修正 but still displayed in the standard category order
 - reruns do not resend the same disclosure because dedupe is based on `notification_type=raw_disclosure_batch` plus disclosure/channel/destination
 - normal cron operation uses `created_at` lookback; replay uses `--date YYYY-MM-DD`
@@ -1297,3 +1297,4 @@ python -m scripts.run_raw_notifications --date 2026-03-18 --force
 - `python -m scripts.report_failure_summary`
 
 Use the reset script in dry-run mode first whenever you are not sure.
+

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unicodedata
 from dataclasses import dataclass
 
@@ -12,6 +13,7 @@ from app.services.disclosure_view_service import category_label, company_display
 
 DISCORD_MESSAGE_LIMIT = 1800
 DISCORD_EMBED_DESCRIPTION_LIMIT = 3500
+DISCORD_MAX_EMBEDS_PER_MESSAGE = 10
 RAW_CLASSIFICATION_PRIORITY = ["guidance", "dividend", "earnings", "other"]
 RAW_DISPLAY_ORDER = ["earnings", "guidance", "dividend", "other"]
 RAW_CATEGORY_LABELS = {
@@ -38,7 +40,6 @@ RAW_EQUITY_EXCLUDE_KEYWORDS = (
     "上場投信",
     "上場インデックスファンド",
 )
-RAW_OTHER_PREVIEW_LIMIT = 5
 RAW_SHORT_TITLE_REPLACEMENTS = (
     ("業績予想及び配当予想の修正", "業績予想・配当予想修正"),
     ("業績予想および配当予想の修正", "業績予想・配当予想修正"),
@@ -56,6 +57,14 @@ RAW_SHORT_TITLE_REPLACEMENTS = (
 class RawDiscordBatch:
     disclosures: list[Disclosure]
     payload: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _RawCategoryEmbedChunk:
+    category: str
+    total_count: int
+    disclosures: list[Disclosure]
+    description: str
 
 
 def build_notification_body(
@@ -124,32 +133,36 @@ def build_raw_discord_batches(
     disclosures: list[Disclosure],
     filtered_out_count: int,
     batch_size: int,
-    other_preview_limit: int = RAW_OTHER_PREVIEW_LIMIT,
 ) -> list[RawDiscordBatch]:
-    if batch_size < 1:
-        batch_size = 1
-
     eligible = sort_raw_disclosures(filter_raw_disclosures(disclosures))
     if not eligible:
         return []
 
-    chunks = [eligible[index : index + batch_size] for index in range(0, len(eligible), batch_size)]
+    category_chunks = _build_raw_category_embed_chunks(eligible, batch_size=batch_size)
     total_counts = _raw_category_counts(eligible)
-    batches: list[RawDiscordBatch] = []
+    payloads: list[RawDiscordBatch] = []
 
-    for index, chunk in enumerate(chunks):
-        embeds: list[dict[str, object]] = []
-        if index == 0:
-            embeds.append(
-                _build_raw_summary_embed(
-                    eligible_count=len(eligible),
-                    filtered_out_count=filtered_out_count,
-                    category_counts=total_counts,
-                )
-            )
-        embeds.extend(_build_raw_category_embeds(chunk, other_preview_limit=other_preview_limit))
-        batches.append(RawDiscordBatch(disclosures=chunk, payload={"embeds": embeds}))
-    return batches
+    current_embeds: list[dict[str, object]] = [
+        _build_raw_summary_embed(
+            eligible_count=len(eligible),
+            filtered_out_count=filtered_out_count,
+            category_counts=total_counts,
+        )
+    ]
+    current_disclosures: list[Disclosure] = []
+
+    for chunk in category_chunks:
+        embed = _build_raw_category_embed(chunk, total_parts=_category_total_parts(category_chunks, chunk.category), part_index=_category_part_index(category_chunks, chunk))
+        if len(current_embeds) >= DISCORD_MAX_EMBEDS_PER_MESSAGE:
+            payloads.append(RawDiscordBatch(disclosures=current_disclosures, payload={"embeds": current_embeds}))
+            current_embeds = []
+            current_disclosures = []
+        current_embeds.append(embed)
+        current_disclosures.extend(chunk.disclosures)
+
+    if current_embeds:
+        payloads.append(RawDiscordBatch(disclosures=current_disclosures, payload={"embeds": current_embeds}))
+    return payloads
 
 
 def filter_raw_disclosures(disclosures: list[Disclosure]) -> list[Disclosure]:
@@ -295,47 +308,73 @@ def _build_raw_summary_embed(
     return {
         "title": f"全市場 新規開示 {eligible_count}件",
         "description": summary,
-        "color": RAW_CATEGORY_COLORS['summary'],
+        "color": RAW_CATEGORY_COLORS["summary"],
     }
 
 
-def _build_raw_category_embeds(
-    disclosures: list[Disclosure],
-    *,
-    other_preview_limit: int,
-) -> list[dict[str, object]]:
-    embeds: list[dict[str, object]] = []
+def _build_raw_category_embed_chunks(disclosures: list[Disclosure], *, batch_size: int) -> list[_RawCategoryEmbedChunk]:
+    safe_batch_size = max(1, batch_size)
+    chunks: list[_RawCategoryEmbedChunk] = []
     for category in RAW_DISPLAY_ORDER:
         items = [disclosure for disclosure in disclosures if classify_raw_disclosure(disclosure) == category]
         if not items:
             continue
-        description = _build_raw_category_description(category, items, other_preview_limit=other_preview_limit)
-        embeds.append(
-            {
-                "title": f"{RAW_CATEGORY_LABELS[category]} {len(items)}件",
-                "description": _truncate_text(description, DISCORD_EMBED_DESCRIPTION_LIMIT),
-                "color": RAW_CATEGORY_COLORS[category],
-            }
-        )
-    return embeds
+        total_count = len(items)
+        current_chunk: list[Disclosure] = []
+        current_blocks: list[str] = []
+        for disclosure in items:
+            block = _build_raw_embed_block(disclosure)
+            tentative_blocks = current_blocks + [block]
+            tentative_description = "\n\n".join(tentative_blocks)
+            if current_chunk and (len(tentative_description) > DISCORD_EMBED_DESCRIPTION_LIMIT or len(current_chunk) >= safe_batch_size):
+                chunks.append(
+                    _RawCategoryEmbedChunk(
+                        category=category,
+                        total_count=total_count,
+                        disclosures=current_chunk,
+                        description="\n\n".join(current_blocks),
+                    )
+                )
+                current_chunk = [disclosure]
+                current_blocks = [block]
+            else:
+                current_chunk = current_chunk + [disclosure]
+                current_blocks = tentative_blocks
+        if current_chunk:
+            chunks.append(
+                _RawCategoryEmbedChunk(
+                    category=category,
+                    total_count=total_count,
+                    disclosures=current_chunk,
+                    description="\n\n".join(current_blocks),
+                )
+            )
+    return chunks
 
 
-def _build_raw_category_description(
-    category: str,
-    disclosures: list[Disclosure],
+def _build_raw_category_embed(
+    chunk: _RawCategoryEmbedChunk,
     *,
-    other_preview_limit: int,
-) -> str:
-    visible_items = disclosures
-    hidden_count = 0
-    if category == "other" and len(disclosures) > other_preview_limit:
-        visible_items = disclosures[:other_preview_limit]
-        hidden_count = len(disclosures) - len(visible_items)
+    total_parts: int,
+    part_index: int,
+) -> dict[str, object]:
+    title = f"{RAW_CATEGORY_LABELS[chunk.category]} {chunk.total_count}件"
+    if total_parts > 1:
+        title = f"{title}({part_index}/{total_parts})"
+    return {
+        "title": title,
+        "description": chunk.description,
+        "color": RAW_CATEGORY_COLORS[chunk.category],
+    }
 
-    blocks = [_build_raw_embed_block(disclosure) for disclosure in visible_items]
-    if hidden_count:
-        blocks.append(f"他 {hidden_count}件")
-    return "\n\n".join(blocks)
+
+def _category_total_parts(chunks: list[_RawCategoryEmbedChunk], category: str) -> int:
+    return sum(1 for chunk in chunks if chunk.category == category)
+
+
+def _category_part_index(chunks: list[_RawCategoryEmbedChunk], current_chunk: _RawCategoryEmbedChunk) -> int:
+    same_category = [chunk for chunk in chunks if chunk.category == current_chunk.category]
+    return same_category.index(current_chunk) + 1
 
 
 def _build_raw_embed_block(disclosure: Disclosure) -> str:
