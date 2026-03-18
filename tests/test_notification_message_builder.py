@@ -13,7 +13,6 @@ from app.services.notification_message_builder import (
     build_raw_discord_batches,
     build_raw_disclosure_batches,
     build_raw_short_title,
-    build_raw_summary_line,
     classify_raw_disclosure,
     filter_raw_disclosures,
 )
@@ -173,53 +172,6 @@ def test_build_raw_short_title_applies_rule_based_shortening() -> None:
     assert build_raw_short_title("特別損失の計上に関するお知らせ") == "特損計上"
 
 
-def test_build_raw_summary_line_maps_common_titles() -> None:
-    company = Company(id=1, code="1111", name="個別株")
-    guidance = Disclosure(
-        id=11,
-        company_id=1,
-        company=company,
-        source_name="jpx-tdnet",
-        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
-        title="業績予想の修正に関するお知らせ",
-        category=DisclosureCategory.OTHER,
-        priority=DisclosurePriority.LOW,
-        source_url="https://example.com/guidance",
-        is_new=False,
-        is_analysis_target=False,
-    )
-    dividend = Disclosure(
-        id=12,
-        company_id=1,
-        company=company,
-        source_name="jpx-tdnet",
-        disclosed_at=datetime.fromisoformat("2026-03-13T15:05:00+09:00"),
-        title="配当予想の修正に関するお知らせ",
-        category=DisclosureCategory.OTHER,
-        priority=DisclosurePriority.LOW,
-        source_url="https://example.com/dividend",
-        is_new=False,
-        is_analysis_target=False,
-    )
-    buyback = Disclosure(
-        id=13,
-        company_id=1,
-        company=company,
-        source_name="jpx-tdnet",
-        disclosed_at=datetime.fromisoformat("2026-03-13T15:10:00+09:00"),
-        title="自己株式取得に関するお知らせ",
-        category=DisclosureCategory.OTHER,
-        priority=DisclosurePriority.LOW,
-        source_url="https://example.com/buyback",
-        is_new=False,
-        is_analysis_target=False,
-    )
-
-    assert build_raw_summary_line(guidance) == "要約: 通期業績予想を修正"
-    assert build_raw_summary_line(dividend) == "要約: 配当予想を修正"
-    assert build_raw_summary_line(buyback) == "要約: 自己株取得を発表"
-
-
 def test_build_raw_discord_batches_creates_summary_and_category_embeds() -> None:
     company = Company(id=1, code="7203", name="Toyota", name_ja="トヨタ自動車")
     disclosures = [
@@ -264,7 +216,7 @@ def test_build_raw_discord_batches_creates_summary_and_category_embeds() -> None
     assert "15:00" in earnings_embed["description"]
     assert "7203" in earnings_embed["description"]
     assert "トヨタ自動車" in earnings_embed["description"]
-    assert "要約: 決算短信を開示" in earnings_embed["description"]
+    assert "要約:" not in earnings_embed["description"]
     assert "PDF: <https://example.com/1>" in earnings_embed["description"]
 
 

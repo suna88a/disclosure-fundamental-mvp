@@ -1208,7 +1208,7 @@ Behavior:
 - the first embed is a summary block such as `決算短信 4 / 業績修正 7 / 配当修正 5 / その他 15 / 除外 22`
 - category embeds are color-coded: 決算短信=青 / 業績修正=オレンジ / 配当修正=緑 / その他=グレー
 - each category header includes a count, for example `【業績修正 12件】`
-- each item is shortened to four lines: `時刻 / コード / 会社名`, short title, `要約: ...`, and `PDF: <...>`
+- each item is shortened to three lines: `時刻 / コード / 会社名`, short title, and `PDF: <...>`
 - the one-line summary is rule-based and favors quick scanning on mobile
   - guidance revision -> `要約: 通期業績予想を修正`
   - dividend revision -> `要約: 配当予想を修正`
@@ -1297,4 +1297,5 @@ python -m scripts.run_raw_notifications --date 2026-03-18 --force
 - `python -m scripts.report_failure_summary`
 
 Use the reset script in dry-run mode first whenever you are not sure.
+
 
