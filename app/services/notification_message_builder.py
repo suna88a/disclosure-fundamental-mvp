@@ -167,7 +167,7 @@ def sort_raw_disclosures(disclosures: list[Disclosure]) -> list[Disclosure]:
 def classify_raw_disclosure(disclosure: Disclosure) -> str:
     title = disclosure.title or ""
     normalized = title.replace(" ", "")
-    has_dividend = any(keyword in normalized for keyword in ("配当予想の修正", "配当修正", "増配", "減配", "復配", "無配"))
+    has_dividend = any(keyword in normalized for keyword in ("配当予想の修正", "配当修正", "増配", "減配", "復配", "無配", "初配"))
     has_guidance = any(keyword in normalized for keyword in ("業績予想", "通期予想", "連結業績予想", "業績修正"))
 
     if has_guidance:
@@ -198,6 +198,37 @@ def build_raw_short_title(title: str) -> str:
             shortened = shortened[: -len(suffix)]
     shortened = shortened.strip(" 　-")
     return _truncate_text(shortened or title, 48)
+
+
+def build_raw_summary_line(disclosure: Disclosure) -> str:
+    normalized = unicodedata.normalize("NFKC", disclosure.title or "")
+    if any(keyword in normalized for keyword in ("業績予想", "通期予想", "連結業績予想", "業績修正")):
+        return "要約: 通期業績予想を修正"
+    if "初配" in normalized or "初配当" in normalized:
+        return "要約: 初配を発表"
+    if "増配" in normalized:
+        return "要約: 増配を発表"
+    if "減配" in normalized:
+        return "要約: 減配を発表"
+    if "復配" in normalized:
+        return "要約: 復配を発表"
+    if "無配" in normalized:
+        return "要約: 無配を発表"
+    if any(keyword in normalized for keyword in ("配当予想", "配当修正")):
+        return "要約: 配当予想を修正"
+    if "特別損失" in normalized:
+        return "要約: 特損を計上"
+    if "特別利益" in normalized:
+        return "要約: 特益を計上"
+    if any(keyword in normalized for keyword in ("自己株式取得", "自己株取得", "自己株式の取得", "自社株買い")):
+        return "要約: 自己株取得を発表"
+    if any(keyword in normalized for keyword in ("中期経営計画", "中期計画", "中計")):
+        return "要約: 中計を公表"
+    if any(keyword in normalized for keyword in ("資本業務提携", "業務提携", "提携")):
+        return "要約: 提携を発表"
+    if "決算短信" in normalized or disclosure.category == DisclosureCategory.EARNINGS_REPORT:
+        return "要約: 決算短信を開示"
+    return f"要約: {build_raw_short_title(disclosure.title)}"
 
 
 def _valuation_line(valuation: ValuationView | None) -> str:
@@ -312,7 +343,8 @@ def _build_raw_embed_block(disclosure: Disclosure) -> str:
     company_name = company_display_name(disclosure.company)
     line1 = f"{timestamp} / {disclosure.company.code} / {company_name}"
     line2 = build_raw_short_title(disclosure.title)
-    return f"{line1}\n{line2}\nPDF: <{disclosure.source_url}>"
+    line3 = build_raw_summary_line(disclosure)
+    return f"{line1}\n{line2}\n{line3}\nPDF: <{disclosure.source_url}>"
 
 
 def _truncate_text(value: str, limit: int) -> str:
