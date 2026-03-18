@@ -5,6 +5,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.models.enums import NotificationChannel, NotificationStatus, NotificationType
+
+
+def _enum_values(enum_cls):
+    return [member.value for member in enum_cls]
 from app.models.mixins import TimestampMixin
 
 
@@ -15,18 +19,18 @@ class Notification(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     disclosure_id: Mapped[int] = mapped_column(ForeignKey("disclosures.id"), index=True, nullable=False)
     notification_type: Mapped[NotificationType] = mapped_column(
-        Enum(NotificationType, native_enum=False),
+        Enum(NotificationType, native_enum=False, values_callable=_enum_values),
         nullable=False,
     )
     channel: Mapped[NotificationChannel] = mapped_column(
-        Enum(NotificationChannel, native_enum=False),
+        Enum(NotificationChannel, native_enum=False, values_callable=_enum_values),
         nullable=False,
     )
     destination: Mapped[str] = mapped_column(String(255), nullable=False)
     dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[NotificationStatus] = mapped_column(
-        Enum(NotificationStatus, native_enum=False),
+        Enum(NotificationStatus, native_enum=False, values_callable=_enum_values),
         default=NotificationStatus.PENDING,
         nullable=False,
     )

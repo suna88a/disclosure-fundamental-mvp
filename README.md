@@ -980,6 +980,7 @@ For weekly maintenance on a small VPS:
 - UI formatting rounds scores and rates for readability. Stored values remain unchanged in SQLite.
 - `valuation_views` is generated from `analysis_results` as a conservative hypothesis layer, not as a price-screening or price-prediction feature.
 - Notifications use `disclosure_id + notification_type + channel + destination` as the dedupe key.
+- `notifications.notification_type`, `channel`, and `status` are stored using enum `.value` strings such as `raw_disclosure_batch`, `discord`, and `sent`.
 - The primary notification path continues to use `should_notify` based analysis alerts.
 - A secondary raw-market notification path can batch newly fetched disclosures to a separate Discord webhook every pipeline run.
 - UI currently exposes two lightweight server-rendered pages: `/disclosures` and `/disclosures/{id}`. The notification detail URL should point to `/disclosures/{id}`.
@@ -1201,6 +1202,7 @@ Behavior:
 - primary notifications still use `dispatch_notifications`
 - raw market notifications use `dispatch_raw_notifications`
 - raw messages are filtered to plain equity-style disclosures only at send time; all disclosures remain saved in SQLite
+- raw exclusion keywords also cover commodity-style listed trusts and product vehicles such as `上場信託`, `現物国内保管型`, `SPDR`, `ゴールド・シェア`, `純金`, `純プラチナ`, and `ETP`
 - raw notifications are sent for disclosures that are newly ingested within the configured lookback window, or for a replay date supplied to `run_raw_notifications`
 - each disclosure still gets its own dedupe key in the `notifications` table
 - categories are rendered in this order: 決算短信 / 業績修正 / 配当修正 / その他
@@ -1279,6 +1281,8 @@ This removes day-linked rows from:
 
 It does not delete company master rows, and it does not delete orphaned PDF files on disk. Run storage cleanup later if needed.
 
+When the day is fetched again from TDnet, existing company rows are refreshed if their stored company name is still `Unknown ...` or looks like mojibake. This is what lets the replay flow correct old broken company names without deleting the company master row itself.
+
 3. Re-fetch the disclosure day:
 
 ```powershell
@@ -1297,5 +1301,16 @@ python -m scripts.run_raw_notifications --date 2026-03-18 --force
 - `python -m scripts.report_failure_summary`
 
 Use the reset script in dry-run mode first whenever you are not sure.
+
+### Repair Legacy Notification Enum Values
+
+If an older database still contains enum names such as `RAW_DISCLOSURE_BATCH`, repair them before replaying notifications:
+
+```powershell
+python -m scripts.repair_notification_enum_values
+python -m scripts.repair_notification_enum_values --apply
+```
+
+This rewrites legacy `notifications.notification_type`, `channel`, and `status` values to their lowercase enum `.value` form.
 
 
