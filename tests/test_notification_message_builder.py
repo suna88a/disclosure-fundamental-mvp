@@ -6,8 +6,10 @@ from app.models.company import Company
 from app.models.disclosure import Disclosure
 from app.models.enums import DisclosureCategory, DisclosurePriority
 from app.models.valuation_view import ValuationView
+import app.services.notification_message_builder as notification_message_builder
 from app.services.notification_message_builder import (
     RAW_CATEGORY_COLORS,
+    DISCORD_EMBED_TOTAL_TEXT_LIMIT,
     build_dedupe_key,
     build_notification_body,
     build_raw_discord_batches,
@@ -96,10 +98,12 @@ def test_build_raw_disclosure_batches_splits_by_batch_size() -> None:
     assert "件】" in batches[0][1]
 
 
-def test_filter_raw_disclosures_excludes_etf_reit_and_infra_with_normalization() -> None:
+def test_filter_raw_disclosures_excludes_etf_reit_infra_and_commodity_trusts() -> None:
     equity = Company(id=1, code="1111", name="個別株")
     reit = Company(id=2, code="2222", name="日本リート投資法人")
     etf = Company(id=3, code="3333", name="ＴＯＰＩＸ　ＥＴＦ")
+    commodity_trust = Company(id=4, code="1541", name="純プラチナ上場信託(現物国内保管型)")
+    spdr = Company(id=5, code="1326", name="SPDRゴールド・シェア")
 
     disclosures = [
         Disclosure(
@@ -138,6 +142,32 @@ def test_filter_raw_disclosures_excludes_etf_reit_and_infra_with_normalization()
             category=DisclosureCategory.OTHER,
             priority=DisclosurePriority.LOW,
             source_url="https://example.com/etf",
+            is_new=True,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=4,
+            company_id=4,
+            company=commodity_trust,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:03:00+09:00"),
+            title="分配金のお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/commodity",
+            is_new=True,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=5,
+            company_id=5,
+            company=spdr,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:04:00+09:00"),
+            title="SPDRゴールド・シェアに関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/spdr",
             is_new=True,
             is_analysis_target=False,
         ),
@@ -250,3 +280,34 @@ def test_build_raw_discord_batches_splits_other_category_without_ellipsis() -> N
     assert all("他 " not in embed["description"] for embed in other_embeds)
     combined = "\n".join(embed["description"] for embed in other_embeds)
     assert "https://example.com/other/7" in combined
+
+
+def test_build_raw_discord_batches_splits_when_total_embed_text_would_exceed_limit(monkeypatch) -> None:
+    company = Company(id=1, code="7203", name="Toyota", name_ja="トヨタ自動車")
+    long_title = "業績予想の修正に関するお知らせ" + "A" * 400
+    disclosures = []
+    for idx in range(1, 19):
+        disclosures.append(
+            Disclosure(
+                id=idx,
+                company_id=1,
+                company=company,
+                source_name="jpx-tdnet",
+                disclosed_at=datetime.fromisoformat(f"2026-03-13T15:{idx % 60:02d}:00+09:00"),
+                title=long_title,
+                category=DisclosureCategory.OTHER,
+                priority=DisclosurePriority.LOW,
+                source_url=f"https://example.com/limit/{idx}",
+                is_new=False,
+                is_analysis_target=False,
+            )
+        )
+
+    monkeypatch.setattr(notification_message_builder, "DISCORD_EMBED_TOTAL_TEXT_LIMIT", 900)
+    batches = build_raw_discord_batches(disclosures=disclosures, filtered_out_count=0, batch_size=3)
+
+    assert len(batches) >= 2
+    for batch in batches:
+        embeds = batch.payload["embeds"]
+        total_chars = sum(len(str(embed.get("title") or "")) + len(str(embed.get("description") or "")) for embed in embeds)
+        assert total_chars <= DISCORD_EMBED_TOTAL_TEXT_LIMIT

@@ -1224,6 +1224,8 @@ Behavior:
 - normal cron operation uses `created_at` lookback; replay uses `--date YYYY-MM-DD`
 - `--dry-run` previews candidate counts without sending, and `--force` intentionally resends the selected set
 - sending is grouped into batches and split again if the Discord message body or embed groups would grow too large
+- raw Discord batching now also enforces a total embed text budget per message in addition to per-embed description and max-embed-count limits
+- if Discord returns 4xx/5xx for a webhook payload, the error log and `notifications.error_message` include the HTTP status, response body, and a payload summary (embed count, content length, description lengths, total embed chars, payload byte size)
 
 Manual commands:
 

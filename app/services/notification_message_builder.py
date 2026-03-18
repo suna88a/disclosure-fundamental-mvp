@@ -13,6 +13,8 @@ from app.services.disclosure_view_service import category_label, company_display
 DISCORD_MESSAGE_LIMIT = 1800
 DISCORD_EMBED_DESCRIPTION_LIMIT = 3500
 DISCORD_MAX_EMBEDS_PER_MESSAGE = 10
+DISCORD_EMBED_TITLE_LIMIT = 250
+DISCORD_EMBED_TOTAL_TEXT_LIMIT = 5500
 RAW_CLASSIFICATION_PRIORITY = ["guidance", "dividend", "earnings", "other"]
 RAW_DISPLAY_ORDER = ["earnings", "guidance", "dividend", "other"]
 RAW_CATEGORY_LABELS = {
@@ -31,6 +33,7 @@ RAW_CATEGORY_COLORS = {
 RAW_EQUITY_EXCLUDE_KEYWORDS = (
     "ETF",
     "ETN",
+    "ETP",
     "REIT",
     "インフラファンド",
     "投資法人",
@@ -38,6 +41,13 @@ RAW_EQUITY_EXCLUDE_KEYWORDS = (
     "外国投資法人",
     "上場投信",
     "上場インデックスファンド",
+    "上場信託",
+    "現物国内保管型",
+    "SPDR",
+    "ゴールド・シェア",
+    "ゴールドシェア",
+    "純金",
+    "純プラチナ",
 )
 RAW_SHORT_TITLE_REPLACEMENTS = (
     ("業績予想及び配当予想の修正", "業績予想・配当予想修正"),
@@ -156,7 +166,11 @@ def build_raw_discord_batches(
             total_parts=_category_total_parts(category_chunks, chunk.category),
             part_index=_category_part_index(category_chunks, chunk),
         )
-        if len(current_embeds) >= DISCORD_MAX_EMBEDS_PER_MESSAGE:
+        tentative_embeds = current_embeds + [embed]
+        if current_embeds and (
+            len(current_embeds) >= DISCORD_MAX_EMBEDS_PER_MESSAGE
+            or _discord_embed_payload_chars(tentative_embeds) > DISCORD_EMBED_TOTAL_TEXT_LIMIT
+        ):
             payloads.append(RawDiscordBatch(disclosures=current_disclosures, payload={"embeds": current_embeds}))
             current_embeds = []
             current_disclosures = []
@@ -334,10 +348,19 @@ def _build_raw_category_embed(
     if total_parts > 1:
         title = f"{title}({part_index}/{total_parts})"
     return {
-        "title": title,
+        "title": _truncate_text(title, DISCORD_EMBED_TITLE_LIMIT),
         "description": chunk.description,
         "color": RAW_CATEGORY_COLORS[chunk.category],
     }
+
+
+def _discord_embed_payload_chars(embeds: list[dict[str, object]]) -> int:
+    total = 0
+    for embed in embeds:
+        title = str(embed.get("title") or "")
+        description = str(embed.get("description") or "")
+        total += len(title) + len(description)
+    return total
 
 
 def _category_total_parts(chunks: list[_RawCategoryEmbedChunk], category: str) -> int:
