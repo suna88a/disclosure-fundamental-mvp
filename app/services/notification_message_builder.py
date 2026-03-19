@@ -49,6 +49,17 @@ RAW_EQUITY_EXCLUDE_KEYWORDS = (
     "純金",
     "純プラチナ",
 )
+RAW_LOW_URGENCY_EXCLUDE_KEYWORDS = (
+    "月次",
+    "説明資料",
+    "補足資料",
+    "質疑応答",
+    "決算説明会資料",
+    "決算補足説明資料",
+    "説明会資料",
+    "Q&A",
+    "QA",
+)
 RAW_SHORT_TITLE_REPLACEMENTS = (
     ("業績予想及び配当予想の修正", "業績予想・配当予想修正"),
     ("業績予想および配当予想の修正", "業績予想・配当予想修正"),
@@ -248,7 +259,12 @@ def _normalize_raw_text(value: str) -> str:
 
 def _is_raw_equity_candidate(disclosure: Disclosure) -> bool:
     combined = _normalize_raw_text(" ".join(filter(None, [company_display_name(disclosure.company), disclosure.company.name, disclosure.title])))
-    return not any(_normalize_raw_text(keyword) in combined for keyword in RAW_EQUITY_EXCLUDE_KEYWORDS)
+    normalized_title = _normalize_raw_text(disclosure.title or "")
+    if any(_normalize_raw_text(keyword) in combined for keyword in RAW_EQUITY_EXCLUDE_KEYWORDS):
+        return False
+    if any(_normalize_raw_text(keyword) in normalized_title for keyword in RAW_LOW_URGENCY_EXCLUDE_KEYWORDS):
+        return False
+    return True
 
 
 def _build_raw_disclosure_block(disclosure: Disclosure) -> str:

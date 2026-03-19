@@ -311,3 +311,65 @@ def test_build_raw_discord_batches_splits_when_total_embed_text_would_exceed_lim
         embeds = batch.payload["embeds"]
         total_chars = sum(len(str(embed.get("title") or "")) + len(str(embed.get("description") or "")) for embed in embeds)
         assert total_chars <= DISCORD_EMBED_TOTAL_TEXT_LIMIT
+
+
+def test_filter_raw_disclosures_excludes_low_urgency_materials() -> None:
+    company = Company(id=10, code="4444", name="Sample Co")
+    disclosures = [
+        Disclosure(
+            id=10,
+            company_id=10,
+            company=company,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+            title="月次売上高に関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/monthly",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=11,
+            company_id=10,
+            company=company,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:01:00+09:00"),
+            title="2026年3月期 第3四半期 決算説明資料",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/presentation",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=12,
+            company_id=10,
+            company=company,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:02:00+09:00"),
+            title="質疑応答集の公開に関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/qa",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            id=13,
+            company_id=10,
+            company=company,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-13T15:03:00+09:00"),
+            title="業績予想の修正に関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/guidance",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+    ]
+
+    filtered = filter_raw_disclosures(disclosures)
+
+    assert [disclosure.id for disclosure in filtered] == [13]

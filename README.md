@@ -1204,6 +1204,7 @@ Behavior:
 - raw market notifications use `dispatch_raw_notifications`
 - raw messages are filtered to plain equity-style disclosures only at send time; all disclosures remain saved in SQLite
 - raw exclusion keywords also cover commodity-style listed trusts and product vehicles such as `上場信託`, `現物国内保管型`, `SPDR`, `ゴールド・シェア`, `純金`, `純プラチナ`, and `ETP`
+- raw and daily digest notifications also exclude lower-urgency disclosure materials such as `月次`, `説明資料`, `補足資料`, and `質疑応答` at send time
 - raw notifications are sent for disclosures that are newly ingested within the configured lookback window, or for a replay date supplied to `run_raw_notifications`
 - each disclosure still gets its own dedupe key in the `notifications` table
 - categories are rendered in this order: 決算短信 / 業績修正 / 配当修正 / その他
@@ -1242,6 +1243,33 @@ Pipeline behavior:
 
 - `scripts.run_pipeline` runs primary notifications first
 - `scripts.run_pipeline` then runs raw disclosure notifications as a separate final step
+
+## Daily Raw Digest
+
+A separate daily digest job can send the same raw-market style disclosure feed once per weekday at 17:00 JST.
+
+Behavior:
+
+- notification type is `daily_raw_digest`
+- it reuses the same raw disclosure filters, category grouping, and Discord embed builder
+- it targets disclosures from `00:00` through `17:00` JST for one date
+- dedupe is separate from `raw_disclosure_batch`, so the normal raw feed and the 17:00 digest do not block each other
+- it uses the same raw notification channel settings (`RAW_NOTIFICATION_CHANNEL`, `RAW_NOTIFICATION_DESTINATION`, `RAW_DISCORD_WEBHOOK_URL`)
+
+Manual commands:
+
+```powershell
+python -m scripts.run_daily_raw_digest
+python -m scripts.run_daily_raw_digest --date 2026-03-19
+python -m scripts.run_daily_raw_digest --date 2026-03-19 --dry-run
+```
+
+Weekday cron example (17:00 JST):
+
+```cron
+0 17 * * 1-5 cd /srv/disclosure-fundamental-mvp && /srv/disclosure-fundamental-mvp/.venv/bin/python -m scripts.run_daily_raw_digest >> /srv/disclosure-fundamental-mvp/logs/pipeline.log 2>&1
+```
+
 
 Lightsail rollout:
 
