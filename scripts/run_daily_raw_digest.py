@@ -8,7 +8,8 @@ from app.services.notification_dispatch import dispatch_daily_raw_digest_notific
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Dispatch the daily raw disclosure digest for one JST date.")
     parser.add_argument("--date", default="", help="Target JST date in YYYY-MM-DD format. Defaults to today in JST.")
-    parser.add_argument("--dry-run", action="store_true", help="Preview candidate counts without creating notification rows or sending webhooks.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview candidate counts without creating digest records or sending webhooks.")
+    parser.add_argument("--force", action="store_true", help="Bypass daily digest dedupe and resend the selected target date.")
     return parser.parse_args()
 
 
@@ -21,6 +22,7 @@ def main() -> None:
             context.session,
             target_date=target_date,
             dry_run=args.dry_run,
+            force=args.force,
         )
         context.set_processed_count(int(result["processed"]))
         return result

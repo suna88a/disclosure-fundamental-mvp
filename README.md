@@ -1252,7 +1252,8 @@ Behavior:
 
 - notification type is `daily_raw_digest`
 - it reuses the same raw disclosure filters, category grouping, and Discord embed builder
-- it targets disclosures from `00:00` through `17:00` JST for one date
+- it targets disclosures from `00:00:00` through `17:00:00` JST for one date
+- if the final eligible disclosure count is `0`, it still sends one empty digest message instead of silently skipping
 - dedupe is separate from `raw_disclosure_batch`, so the normal raw feed and the 17:00 digest do not block each other
 - it uses the same raw notification channel settings (`RAW_NOTIFICATION_CHANNEL`, `RAW_NOTIFICATION_DESTINATION`, `RAW_DISCORD_WEBHOOK_URL`)
 
@@ -1262,13 +1263,31 @@ Manual commands:
 python -m scripts.run_daily_raw_digest
 python -m scripts.run_daily_raw_digest --date 2026-03-19
 python -m scripts.run_daily_raw_digest --date 2026-03-19 --dry-run
+python -m scripts.run_daily_raw_digest --date 2026-03-19 --force
 ```
 
-Weekday cron example (17:00 JST):
+Production rollout for the new table:
+
+```bash
+cd /srv/disclosure-fundamental-mvp
+. .venv/bin/activate
+python -m scripts.create_daily_digest_notifications_table
+```
+
+`python -m scripts.init_db` is create-only and safe for this specific change because it calls `Base.metadata.create_all(...)` and does not drop or alter existing tables. Still, for production rollout, the dedicated `create_daily_digest_notifications_table` script is preferred because it limits the change to the new table only.
+
+Weekday cron example (17:00 JST, holidays are not excluded):
 
 ```cron
 0 17 * * 1-5 cd /srv/disclosure-fundamental-mvp && /srv/disclosure-fundamental-mvp/.venv/bin/python -m scripts.run_daily_raw_digest >> /srv/disclosure-fundamental-mvp/logs/pipeline.log 2>&1
 ```
+
+Empty digest format:
+
+- title: `全市場 新規開示 0件`
+- description: `{YYYY-MM-DD} 17:00 JST 時点で、対象となる開示はありませんでした。`
+
+`--dry-run` does not send the empty digest, but the result summary still reports `empty_digest=1` and `empty_digest_planned=1` when that is what would have been sent.
 
 
 Lightsail rollout:

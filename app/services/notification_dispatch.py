@@ -12,9 +12,12 @@ from app.models.analysis_result import AnalysisResult
 from app.models.company import Company
 from app.models.disclosure import Disclosure
 from app.models.enums import NotificationChannel, NotificationType
+from app.repositories.daily_digest_notification_repository import DailyDigestNotificationRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.services.notification_message_builder import (
     build_dedupe_key,
+    build_empty_raw_digest_body,
+    build_empty_raw_digest_discord_payload,
     build_notification_body,
     build_raw_disclosure_batches,
     build_raw_discord_batches,
@@ -159,6 +162,7 @@ def dispatch_daily_raw_digest_notifications(
     *,
     target_date: date | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, int | str | None]:
     settings = get_settings()
     if not settings.raw_notification_channel:
@@ -173,29 +177,175 @@ def dispatch_daily_raw_digest_notifications(
     if channel == NotificationChannel.DISCORD and not settings.raw_discord_webhook_url:
         raise ValueError("RAW_DISCORD_WEBHOOK_URL is required for daily raw digest discord notifications.")
     notifier = _build_notifier(channel, discord_webhook_url=settings.raw_discord_webhook_url)
-    repository = NotificationRepository(session)
+    repository = DailyDigestNotificationRepository(session)
 
     effective_target_date = target_date or datetime.now(JST).date()
     all_candidates = _select_daily_raw_digest_candidates(session, target_date=effective_target_date)
     disclosures = filter_raw_disclosures(all_candidates)
     filtered_out = len(all_candidates) - len(disclosures)
-
-    return _dispatch_batched_market_notifications(
-        session=session,
-        disclosures=disclosures,
-        filtered_out=filtered_out,
-        channel=channel,
-        destination=destination,
-        notifier=notifier,
-        repository=repository,
+    dedupe_key = _build_daily_digest_dedupe_key(
         notification_type=NotificationType.DAILY_RAW_DIGEST.value,
-        batch_size=settings.raw_notification_batch_size,
+        channel=channel.value,
+        destination=destination,
+        target_date=effective_target_date,
+    )
+
+    if disclosures:
+        discord_batches = build_raw_discord_batches(
+            disclosures=disclosures,
+            filtered_out_count=filtered_out,
+            batch_size=settings.raw_notification_batch_size,
+        )
+        text_batches = build_raw_disclosure_batches(
+            disclosures=disclosures,
+            batch_size=settings.raw_notification_batch_size,
+        )
+        body_summary = f"daily_raw_digest target_date={effective_target_date.isoformat()} eligible={len(disclosures)} filtered_out={filtered_out}"
+        messages_planned = len(discord_batches) if channel == NotificationChannel.DISCORD else len(text_batches)
+        empty_digest = False
+        empty_digest_planned = False
+    else:
+        body_summary = build_empty_raw_digest_body(target_date=effective_target_date)
+        messages_planned = 1
+        empty_digest = True
+        empty_digest_planned = True
+
+    if dry_run:
+        result = _notification_result(
+            mode="daily_digest",
+            target_date=effective_target_date,
+            lookback_minutes=None,
+            processed=len(all_candidates),
+            filtered_out=filtered_out,
+            candidates=len(disclosures),
+            skipped=0,
+            sent=0,
+            failed=0,
+            messages_sent=0,
+            forced=force,
+            dry_run=True,
+            batch_count=messages_planned,
+            batched_disclosures=len(disclosures),
+            empty_digest=int(empty_digest),
+            empty_digest_sent=0,
+            empty_digest_planned=int(empty_digest_planned),
+        )
+        _log_notification_result(NotificationType.DAILY_RAW_DIGEST.value, result)
+        return result
+
+    digest_notification = repository.prepare_pending(
+        notification_type=NotificationType.DAILY_RAW_DIGEST.value,
+        channel=channel.value,
+        destination=destination,
+        target_date=effective_target_date,
+        dedupe_key=dedupe_key,
+        body=body_summary,
+        force=force,
+    )
+    if digest_notification is None:
+        result = _notification_result(
+            mode="daily_digest",
+            target_date=effective_target_date,
+            lookback_minutes=None,
+            processed=len(all_candidates),
+            filtered_out=filtered_out,
+            candidates=len(disclosures),
+            skipped=1,
+            sent=0,
+            failed=0,
+            messages_sent=0,
+            forced=force,
+            dry_run=False,
+            empty_digest=int(empty_digest),
+            empty_digest_sent=0,
+            empty_digest_planned=0,
+        )
+        _log_notification_result(NotificationType.DAILY_RAW_DIGEST.value, result)
+        return result
+
+    messages_sent = 0
+    sent = 0
+    failed = 0
+    last_external_message_id: str | None = None
+
+    try:
+        if disclosures:
+            if channel == NotificationChannel.DISCORD:
+                for batch in discord_batches:
+                    send_result = notifier.send_payload(destination, batch.payload)
+                    messages_sent += 1
+                    sent += len(batch.disclosures)
+                    last_external_message_id = send_result.external_message_id or last_external_message_id
+            else:
+                for disclosures_in_batch, body in text_batches:
+                    send_result = notifier.send(destination, body)
+                    messages_sent += 1
+                    sent += len(disclosures_in_batch)
+                    last_external_message_id = send_result.external_message_id or last_external_message_id
+        else:
+            if channel == NotificationChannel.DISCORD:
+                empty_payload = build_empty_raw_digest_discord_payload(target_date=effective_target_date)
+                send_result = notifier.send_payload(destination, empty_payload)
+            else:
+                send_result = notifier.send(destination, body_summary)
+            messages_sent = 1
+            last_external_message_id = send_result.external_message_id
+
+        repository.mark_sent(
+            digest_notification,
+            external_message_id=last_external_message_id,
+            message_count=messages_sent,
+        )
+    except Exception as exc:
+        repository.mark_failed(
+            digest_notification,
+            error_message=str(exc),
+            message_count=messages_sent,
+        )
+        failed = len(disclosures) if disclosures else 1
+        result = _notification_result(
+            mode="daily_digest",
+            target_date=effective_target_date,
+            lookback_minutes=None,
+            processed=len(all_candidates),
+            filtered_out=filtered_out,
+            candidates=len(disclosures),
+            skipped=0,
+            sent=sent,
+            failed=failed,
+            messages_sent=messages_sent,
+            forced=force,
+            dry_run=False,
+            empty_digest=int(empty_digest),
+            empty_digest_sent=0,
+            empty_digest_planned=0,
+        )
+        _log_notification_result(NotificationType.DAILY_RAW_DIGEST.value, result)
+        session.flush()
+        session.expire_all()
+        return result
+
+    session.flush()
+    session.expire_all()
+    result = _notification_result(
         mode="daily_digest",
         target_date=effective_target_date,
         lookback_minutes=None,
-        force=False,
-        dry_run=dry_run,
+        processed=len(all_candidates),
+        filtered_out=filtered_out,
+        candidates=len(disclosures),
+        skipped=0,
+        sent=sent,
+        failed=0,
+        messages_sent=messages_sent,
+        forced=force,
+        dry_run=False,
+        empty_digest=int(empty_digest),
+        empty_digest_sent=int(empty_digest),
+        empty_digest_planned=0,
     )
+    _log_notification_result(NotificationType.DAILY_RAW_DIGEST.value, result)
+    return result
 
 
 def _dispatch_batched_market_notifications(
@@ -442,6 +592,16 @@ def _select_daily_raw_digest_candidates(
     return list(session.scalars(query))
 
 
+def _build_daily_digest_dedupe_key(
+    *,
+    notification_type: str,
+    channel: str,
+    destination: str,
+    target_date: date,
+) -> str:
+    return f"{notification_type}:{target_date.isoformat()}:{channel}:{destination}"
+
+
 def _build_notifier(channel: NotificationChannel, *, discord_webhook_url: str | None = None):
     if channel == NotificationChannel.DUMMY:
         return DummyNotifier()
@@ -480,6 +640,9 @@ def _notification_result(
     dry_run: bool,
     batch_count: int | None = None,
     batched_disclosures: int | None = None,
+    empty_digest: int | None = None,
+    empty_digest_sent: int | None = None,
+    empty_digest_planned: int | None = None,
 ) -> dict[str, int | str | None]:
     result: dict[str, int | str | None] = {
         "mode": mode,
@@ -499,12 +662,18 @@ def _notification_result(
         result["batch_count"] = batch_count
     if batched_disclosures is not None:
         result["batched_disclosures"] = batched_disclosures
+    if empty_digest is not None:
+        result["empty_digest"] = empty_digest
+    if empty_digest_sent is not None:
+        result["empty_digest_sent"] = empty_digest_sent
+    if empty_digest_planned is not None:
+        result["empty_digest_planned"] = empty_digest_planned
     return result
 
 
 def _log_notification_result(notification_type: str, result: dict[str, int | str | None]) -> None:
     logger.info(
-        "%s mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s messages_sent=%s forced=%s",
+        "%s mode=%s target_date=%s lookback_minutes=%s processed=%s filtered_out=%s candidates=%s skipped=%s sent=%s failed=%s messages_sent=%s forced=%s empty_digest=%s empty_digest_sent=%s empty_digest_planned=%s",
         notification_type,
         result.get("mode"),
         result.get("target_date"),
@@ -514,6 +683,10 @@ def _log_notification_result(notification_type: str, result: dict[str, int | str
         result.get("candidates"),
         result.get("skipped"),
         result.get("sent"),
+        result.get("failed"),
         result.get("messages_sent"),
         result.get("forced"),
+        result.get("empty_digest"),
+        result.get("empty_digest_sent"),
+        result.get("empty_digest_planned"),
     )

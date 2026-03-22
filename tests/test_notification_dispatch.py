@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.db import Base
 from app.models.analysis_result import AnalysisResult
 from app.models.company import Company
+from app.models.daily_digest_notification import DailyDigestNotification
 from app.models.disclosure import Disclosure
 from app.models.enums import (
     ComparisonErrorReason,
@@ -548,18 +549,69 @@ def test_dispatch_daily_raw_digest_uses_day_window_and_separate_dedupe(monkeypat
     digest_first = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
     digest_second = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
 
-    daily_rows = session.scalars(
-        select(Notification).where(Notification.notification_type == NotificationType.DAILY_RAW_DIGEST)
-    ).all()
+    daily_rows = session.scalars(select(DailyDigestNotification)).all()
 
     assert raw_result["sent"] == 3
     assert digest_first["processed"] == 2
+    assert digest_first["filtered_out"] == 0
+    assert digest_first["candidates"] == 2
     assert digest_first["sent"] == 2
-    assert digest_second["skipped"] == 2
-    assert len(daily_rows) == 2
+    assert digest_first["messages_sent"] == 1
+    assert digest_second["skipped"] == 1
+    assert len(daily_rows) == 1
+    assert daily_rows[0].notification_type.value == "daily_raw_digest"
     assert any("https://example.com/digest/a" in body for body in sent_payloads)
     assert any("https://example.com/digest/b" in body for body in sent_payloads)
     assert all("https://example.com/digest/c" not in body for body in sent_payloads[-1:])
+
+
+def test_dispatch_daily_raw_digest_sends_empty_digest(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    get_settings.cache_clear()
+
+    sent_payloads: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_payloads.append(body)
+        return NotificationSendResult(external_message_id="empty-digest")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7010", name="SPDRゴールド・シェア")
+    session.add(company)
+    session.flush()
+    session.add(
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T10:00:00+09:00"),
+            title="SPDRゴールド・シェアに関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/filtered",
+            is_new=False,
+            is_analysis_target=False,
+        )
+    )
+    session.commit()
+
+    result = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
+    row = session.scalar(select(DailyDigestNotification))
+
+    assert result["processed"] == 1
+    assert result["filtered_out"] == 1
+    assert result["candidates"] == 0
+    assert result["sent"] == 0
+    assert result["messages_sent"] == 1
+    assert result["empty_digest"] == 1
+    assert result["empty_digest_sent"] == 1
+    assert sent_payloads[0] == "全市場 新規開示 0件\n2026-03-19 17:00 JST 時点で、対象となる開示はありませんでした。"
+    assert row is not None
+    assert row.message_count == 1
+    assert row.status == NotificationStatus.SENT
 
 
 def test_dispatch_daily_raw_digest_supports_dry_run(monkeypatch) -> None:
@@ -576,7 +628,7 @@ def test_dispatch_daily_raw_digest_supports_dry_run(monkeypatch) -> None:
         Disclosure(
             company_id=company.id,
             source_name="jpx-tdnet",
-            disclosed_at=datetime.fromisoformat("2026-03-19T10:00:00+09:00"),
+            disclosed_at=datetime.fromisoformat("2026-03-19T18:00:00+09:00"),
             title="決算短信",
             category=DisclosureCategory.EARNINGS_REPORT,
             priority=DisclosurePriority.LOW,
@@ -589,6 +641,227 @@ def test_dispatch_daily_raw_digest_supports_dry_run(monkeypatch) -> None:
 
     result = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19), dry_run=True)
 
-    assert result["processed"] == 1
+    assert result["processed"] == 0
     assert result["dry_run"] == 1
-    assert session.scalar(select(Notification).where(Notification.notification_type == NotificationType.DAILY_RAW_DIGEST)) is None
+    assert result["empty_digest"] == 1
+    assert result["empty_digest_planned"] == 1
+    assert session.scalar(select(DailyDigestNotification)) is None
+
+
+def test_dispatch_daily_raw_digest_force_bypasses_sent_dedupe(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    get_settings.cache_clear()
+
+    sent_payloads: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_payloads.append(body)
+        return NotificationSendResult(external_message_id=f"force-digest-{len(sent_payloads)}")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7020", name="Force Digest Co")
+    session.add(company)
+    session.flush()
+    session.add(
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T10:00:00+09:00"),
+            title="決算短信",
+            category=DisclosureCategory.EARNINGS_REPORT,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/force",
+            is_new=False,
+            is_analysis_target=False,
+        )
+    )
+    session.commit()
+
+    first = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
+    second = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19), force=True)
+
+    assert first["messages_sent"] == 1
+    assert second["messages_sent"] == 1
+    assert len(sent_payloads) == 2
+
+
+def test_dispatch_daily_raw_digest_retries_failed_row(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    get_settings.cache_clear()
+
+    calls = {"count": 0}
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ValueError("transient failure")
+        return NotificationSendResult(external_message_id="retry-ok")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7030", name="Retry Digest Co")
+    session.add(company)
+    session.flush()
+    session.add(
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T11:00:00+09:00"),
+            title="決算短信",
+            category=DisclosureCategory.EARNINGS_REPORT,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/retry",
+            is_new=False,
+            is_analysis_target=False,
+        )
+    )
+    session.commit()
+
+    first = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
+    second = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
+    row = session.scalar(select(DailyDigestNotification))
+
+    assert first["failed"] == 1
+    assert second["messages_sent"] == 1
+    assert row is not None
+    assert row.status == NotificationStatus.SENT
+
+
+def test_dispatch_daily_raw_digest_marks_failed_if_any_batch_fails(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "1")
+    get_settings.cache_clear()
+
+    calls = {"count": 0}
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise ValueError("batch 2 failed")
+        return NotificationSendResult(external_message_id=f"batch-{calls['count']}")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7040", name="Chunk Digest Co")
+    session.add(company)
+    session.flush()
+    session.add_all([
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T09:00:00+09:00"),
+            title="決算短信",
+            category=DisclosureCategory.EARNINGS_REPORT,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/chunk1",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T09:10:00+09:00"),
+            title="業績予想の修正に関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/chunk2",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+    ])
+    session.commit()
+
+    result = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
+    row = session.scalar(select(DailyDigestNotification))
+
+    assert result["failed"] == 2
+    assert result["messages_sent"] == 1
+    assert row is not None
+    assert row.status == NotificationStatus.FAILED
+    assert row.message_count == 1
+
+
+def test_dispatch_daily_raw_digest_jst_boundaries(monkeypatch) -> None:
+    monkeypatch.setenv("RAW_NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("RAW_NOTIFICATION_DESTINATION", "raw-room")
+    monkeypatch.setenv("RAW_NOTIFICATION_BATCH_SIZE", "10")
+    get_settings.cache_clear()
+
+    sent_payloads: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_payloads.append(body)
+        return NotificationSendResult(external_message_id="boundary")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7050", name="Boundary Co")
+    session.add(company)
+    session.flush()
+    session.add_all([
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T00:00:00+09:00"),
+            title="決算短信",
+            category=DisclosureCategory.EARNINGS_REPORT,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/b0",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T16:59:59+09:00"),
+            title="業績予想の修正に関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/b1",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T17:00:00+09:00"),
+            title="配当予想の修正に関するお知らせ",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/b2",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+        Disclosure(
+            company_id=company.id,
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-19T17:00:01+09:00"),
+            title="その他開示",
+            category=DisclosureCategory.OTHER,
+            priority=DisclosurePriority.LOW,
+            source_url="https://example.com/digest/b3",
+            is_new=False,
+            is_analysis_target=False,
+        ),
+    ])
+    session.commit()
+
+    result = dispatch_daily_raw_digest_notifications(session, target_date=date(2026, 3, 19))
+
+    assert result["processed"] == 3
+    assert result["candidates"] == 3
+    combined = "\n".join(sent_payloads)
+    assert "https://example.com/digest/b0" in combined
+    assert "https://example.com/digest/b1" in combined
+    assert "https://example.com/digest/b2" in combined
+    assert "https://example.com/digest/b3" not in combined

@@ -1,5 +1,6 @@
 from app.models.analysis_result import AnalysisResult
 from app.models.company import Company
+from app.models.daily_digest_notification import DailyDigestNotification
 from app.models.disclosure import Disclosure
 from app.models.dividend_revision import DividendRevision
 from app.models.financial_report import FinancialReport
@@ -12,6 +13,7 @@ from app.models.valuation_view import ValuationView
 __all__ = [
     "AnalysisResult",
     "Company",
+    "DailyDigestNotification",
     "Disclosure",
     "DividendRevision",
     "FinancialReport",

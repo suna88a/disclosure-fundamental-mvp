@@ -11,6 +11,8 @@ from app.services.notification_message_builder import (
     RAW_CATEGORY_COLORS,
     DISCORD_EMBED_TOTAL_TEXT_LIMIT,
     build_dedupe_key,
+    build_empty_raw_digest_body,
+    build_empty_raw_digest_discord_payload,
     build_notification_body,
     build_raw_discord_batches,
     build_raw_disclosure_batches,
@@ -373,3 +375,12 @@ def test_filter_raw_disclosures_excludes_low_urgency_materials() -> None:
     filtered = filter_raw_disclosures(disclosures)
 
     assert [disclosure.id for disclosure in filtered] == [13]
+
+
+def test_build_empty_raw_digest_payload_uses_target_date() -> None:
+    payload = build_empty_raw_digest_discord_payload(target_date=datetime.fromisoformat("2026-03-19T00:00:00+09:00").date())
+    embed = payload["embeds"][0]
+
+    assert embed["title"] == "全市場 新規開示 0件"
+    assert embed["description"] == "2026-03-19 17:00 JST 時点で、対象となる開示はありませんでした。"
+    assert build_empty_raw_digest_body(target_date=datetime.fromisoformat("2026-03-19T00:00:00+09:00").date()).startswith("全市場 新規開示 0件")

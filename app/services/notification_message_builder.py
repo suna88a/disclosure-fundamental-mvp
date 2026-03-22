@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass
+from datetime import date
 
 from app.models.analysis_result import AnalysisResult
 from app.models.disclosure import Disclosure
@@ -191,6 +192,25 @@ def build_raw_discord_batches(
     if current_embeds:
         payloads.append(RawDiscordBatch(disclosures=current_disclosures, payload={"embeds": current_embeds}))
     return payloads
+
+
+def build_empty_raw_digest_discord_payload(*, target_date: date) -> dict[str, object]:
+    return {
+        "embeds": [
+            {
+                "title": "全市場 新規開示 0件",
+                "description": f"{target_date.isoformat()} 17:00 JST 時点で、対象となる開示はありませんでした。",
+                "color": RAW_CATEGORY_COLORS["summary"],
+            }
+        ]
+    }
+
+
+def build_empty_raw_digest_body(*, target_date: date) -> str:
+    return (
+        "全市場 新規開示 0件\n"
+        f"{target_date.isoformat()} 17:00 JST 時点で、対象となる開示はありませんでした。"
+    )
 
 
 def filter_raw_disclosures(disclosures: list[Disclosure]) -> list[Disclosure]:
