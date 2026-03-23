@@ -51,3 +51,14 @@ def test_settings_reads_revision_body_flags(monkeypatch) -> None:
 
     assert settings.analysis_alert_enable_revision_bodies is True
     assert settings.analysis_alert_revision_body_dry_run is True
+
+
+def test_settings_reads_jpx_disclosure_url_template(monkeypatch) -> None:
+    monkeypatch.setenv("JPX_DISCLOSURE_URL_TEMPLATE", "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html")
+    monkeypatch.setenv("DISCLOSURE_SOURCE_URL", "https://example.com/disclosures.json")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.jpx_disclosure_url_template == "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html"
+    assert settings.disclosure_source_url == "https://example.com/disclosures.json"

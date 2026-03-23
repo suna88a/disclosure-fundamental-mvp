@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/app.db"
     log_level: str = "INFO"
     web_base_url: str = "https://example.com/app"
+    disclosure_source_url: str | None = None
+    jpx_disclosure_url_template: str | None = None
     notification_channel: str = "dummy"
     notification_destination: str = "dummy-channel"
     analysis_alert_enable_valuation_lines: bool = False
