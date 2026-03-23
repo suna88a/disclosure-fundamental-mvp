@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.models.analysis_result import AnalysisResult
 from app.models.company import Company
 from app.models.disclosure import Disclosure
-from app.models.enums import NotificationChannel, NotificationType
+from app.models.enums import DisclosureCategory, NotificationChannel, NotificationType
 from app.repositories.daily_digest_notification_repository import DailyDigestNotificationRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.services.notification_message_builder import (
@@ -21,9 +21,13 @@ from app.services.notification_message_builder import (
     build_notification_body,
     build_raw_disclosure_batches,
     build_raw_discord_batches,
+    build_structured_notification_body,
     filter_raw_disclosures,
 )
 from app.services.notifiers import DiscordNotifier, DummyNotifier, TelegramNotifier
+from app.services.analysis_alert_valuation_bridge_service import build_analysis_alert_valuation_draft
+from app.services.guidance_revision_notification_service import build_guidance_revision_notification_text
+from app.services.dividend_revision_notification_service import build_dividend_revision_notification_text
 
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -76,12 +80,53 @@ def dispatch_notifications(session: Session) -> dict[str, int]:
             skipped += 1
             continue
 
-        body = build_notification_body(
-            disclosure=disclosure,
-            analysis=analysis,
-            valuation=valuation,
-            web_base_url=settings.web_base_url,
-        )
+        revision_body: str | None = None
+        if settings.analysis_alert_enable_revision_bodies:
+            revision_preview = _build_revision_notification_preview(session, disclosure)
+            if revision_preview is not None:
+                if settings.analysis_alert_revision_body_dry_run:
+                    logger.info(
+                        "analysis_alert_revision_body_dry_run disclosure_id=%s headline=%s metadata=%s body_lines=%s",
+                        disclosure.id,
+                        revision_preview.headline,
+                        revision_preview.metadata,
+                        revision_preview.body_lines,
+                    )
+                else:
+                    detail_url = f"{settings.web_base_url.rstrip('/')}/disclosures/{disclosure.id}"
+                    revision_body = build_structured_notification_body(
+                        headline=revision_preview.headline,
+                        body_lines=revision_preview.body_lines,
+                        detail_url=detail_url,
+                    )
+
+        if revision_body is not None:
+            body = revision_body
+        else:
+            valuation_lines: tuple[str, ...] = ()
+            if settings.analysis_alert_enable_valuation_lines:
+                valuation_draft = build_analysis_alert_valuation_draft(session, disclosure)
+                if valuation_draft is not None:
+                    if settings.analysis_alert_valuation_dry_run:
+                        logger.info(
+                            "analysis_alert_valuation_dry_run disclosure_id=%s title=%s shown_fields=%s omitted_fields=%s suppressed_reasons=%s warnings=%s",
+                            disclosure.id,
+                            valuation_draft.title,
+                            valuation_draft.metadata.get("shown_fields"),
+                            valuation_draft.metadata.get("omitted_fields"),
+                            valuation_draft.metadata.get("suppressed_reasons"),
+                            valuation_draft.metadata.get("warnings"),
+                        )
+                    elif valuation_draft.valuation_lines:
+                        valuation_lines = valuation_draft.valuation_lines
+
+            body = build_notification_body(
+                disclosure=disclosure,
+                analysis=analysis,
+                valuation=valuation,
+                web_base_url=settings.web_base_url,
+                valuation_lines=valuation_lines,
+            )
         notification = repository.create_pending(
             disclosure_id=disclosure.id,
             notification_type=NotificationType.ANALYSIS_ALERT.value,
@@ -690,3 +735,12 @@ def _log_notification_result(notification_type: str, result: dict[str, int | str
         result.get("empty_digest_sent"),
         result.get("empty_digest_planned"),
     )
+
+
+
+def _build_revision_notification_preview(session: Session, disclosure: Disclosure):
+    if disclosure.category == DisclosureCategory.GUIDANCE_REVISION:
+        return build_guidance_revision_notification_text(session, disclosure)
+    if disclosure.category == DisclosureCategory.DIVIDEND_REVISION:
+        return build_dividend_revision_notification_text(session, disclosure)
+    return None

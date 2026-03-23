@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     web_base_url: str = "https://example.com/app"
     notification_channel: str = "dummy"
     notification_destination: str = "dummy-channel"
+    analysis_alert_enable_valuation_lines: bool = False
+    analysis_alert_valuation_dry_run: bool = False
+    analysis_alert_enable_revision_bodies: bool = False
+    analysis_alert_revision_body_dry_run: bool = False
     raw_notification_channel: str | None = None
     raw_notification_destination: str = "discord-raw"
     raw_discord_webhook_url: str | None = None

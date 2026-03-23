@@ -8,6 +8,7 @@ from app.models.guidance_revision import GuidanceRevision
 from app.models.job_run import JobRun
 from app.models.notification import Notification
 from app.models.pdf_file import PdfFile
+from app.models.price_daily import PriceDaily
 from app.models.valuation_view import ValuationView
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "JobRun",
     "Notification",
     "PdfFile",
+    "PriceDaily",
     "ValuationView",
 ]

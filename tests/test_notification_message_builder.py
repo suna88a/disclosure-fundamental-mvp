@@ -384,3 +384,33 @@ def test_build_empty_raw_digest_payload_uses_target_date() -> None:
     assert embed["title"] == "全市場 新規開示 0件"
     assert embed["description"] == "2026-03-19 17:00 JST 時点で、対象となる開示はありませんでした。"
     assert build_empty_raw_digest_body(target_date=datetime.fromisoformat("2026-03-19T00:00:00+09:00").date()).startswith("全市場 新規開示 0件")
+
+
+def test_build_notification_body_appends_valuation_lines_when_provided() -> None:
+    company = Company(id=1, code="7203", name="Toyota", name_ja="トヨタ自動車")
+    disclosure = Disclosure(
+        id=20,
+        company_id=1,
+        company=company,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.GUIDANCE_REVISION,
+        priority=DisclosurePriority.HIGH,
+        source_url="https://example.com/disclosure/20",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    analysis = AnalysisResult(disclosure_id=20, auto_summary="業績修正", overall_score=Decimal("2.5"))
+
+    body = build_notification_body(
+        disclosure=disclosure,
+        analysis=analysis,
+        valuation=None,
+        web_base_url="https://example.com/app",
+        valuation_lines=("PER(会社予想EPS): 12.3", "配当利回り: 2.4%"),
+    )
+
+    assert "PER(会社予想EPS): 12.3" in body
+    assert "配当利回り: 2.4%" in body
+    assert body.index("PER(会社予想EPS): 12.3") < body.index("詳細: https://example.com/app/disclosures/20")

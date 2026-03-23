@@ -94,22 +94,36 @@ def build_notification_body(
     analysis: AnalysisResult,
     valuation: ValuationView | None,
     web_base_url: str,
+    valuation_lines: tuple[str, ...] = (),
 ) -> str:
     company = disclosure.company
     category = category_label(disclosure.category)
     summary = analysis.auto_summary or "要点は確認中です。"
-    valuation_line = _valuation_line(valuation)
-    score_line = f"総合スコア: {format_score(analysis.overall_score)}\n" if analysis.overall_score is not None else ""
     detail_url = f"{web_base_url.rstrip('/')}/disclosures/{disclosure.id}"
 
-    return (
-        f"{company.code} {company_display_name(company)}\n"
-        f"開示種別: {category}\n"
-        f"要点: {summary}\n"
-        f"{valuation_line}\n"
-        f"{score_line}"
-        f"詳細: {detail_url}"
-    ).strip()
+    lines = [
+        f"{company.code} {company_display_name(company)}",
+        f"開示種別: {category}",
+        f"要点: {summary}",
+        _valuation_line(valuation),
+    ]
+    if analysis.overall_score is not None:
+        lines.append(f"総合スコア: {format_score(analysis.overall_score)}")
+    lines.extend(line for line in valuation_lines if line and line.strip())
+    lines.append(f"詳細: {detail_url}")
+    return "\n".join(lines).strip()
+
+
+def build_structured_notification_body(
+    *,
+    headline: str,
+    body_lines: tuple[str, ...],
+    detail_url: str,
+) -> str:
+    lines = [headline]
+    lines.extend(line for line in body_lines if line and line.strip())
+    lines.append(f"詳細: {detail_url}")
+    return "\n".join(lines).strip()
 
 
 def build_raw_disclosure_batches(

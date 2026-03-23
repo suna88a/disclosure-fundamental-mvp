@@ -27,6 +27,38 @@
     </section>
 
     <section class="section-card">
+      <h2>参照価格</h2>
+      {% if reference_price %}
+        <dl class="detail-grid">
+          <div><dt>参照取引日</dt><dd>{{ reference_price.reference_trade_date.isoformat() }}</dd></div>
+          <div><dt>終値</dt><dd>{{ format_decimal(reference_price.close) }}円</dd></div>
+          <div><dt>価格ソース</dt><dd>{{ reference_price.source }}</dd></div>
+          <div><dt>ソース記号</dt><dd>{{ reference_price.source_symbol }}</dd></div>
+        </dl>
+      {% else %}
+        <p>参照価格は未登録です。</p>
+      {% endif %}
+    </section>
+
+
+
+    <section class="section-card">
+      <h2>投資指標</h2>
+      {% if valuation_snapshot %}
+        <dl class="detail-grid">
+          <div><dt>PER(参照価格/EPS)</dt><dd>{% if valuation_snapshot.metrics.forward_per is not none %}{{ format_score(valuation_snapshot.metrics.forward_per) }}{% else %}未計算{% endif %}</dd></div>
+          <div><dt>配当利回り</dt><dd>{% if valuation_snapshot.metrics.dividend_yield is not none %}{{ format_decimal(valuation_snapshot.metrics.dividend_yield * 100, "%") }}{% else %}未計算{% endif %}</dd></div>
+          <div><dt>EPS基準</dt><dd>{{ eps_basis_label(valuation_snapshot.metrics.eps_basis) }}</dd></div>
+          <div><dt>EPSソース</dt><dd>{{ format_text(valuation_snapshot.inputs.eps_source, "未計算") }}</dd></div>
+          <div><dt>年間配当ソース</dt><dd>{{ annual_dps_source_label(valuation_snapshot.inputs.annual_dps_source) }}</dd></div>
+          <div><dt>警告</dt><dd>{% if valuation_snapshot.metrics.warnings %}{% for warning in valuation_snapshot.metrics.warnings %}{% if not loop.first %}, {% endif %}{{ valuation_warning_label(warning) }}{% endfor %}{% else %}なし{% endif %}</dd></div>
+        </dl>
+      {% else %}
+        <p>未計算</p>
+      {% endif %}
+    </section>
+
+    <section class="section-card">
       <h2>PDF取得状態</h2>
       {% if disclosure.pdf_files %}
         {% for pdf in disclosure.pdf_files %}

@@ -5,6 +5,7 @@ import requests
 
 from app.fetchers.disclosure_fetcher import DEFAULT_USER_AGENT, HttpJsonDisclosureFetcher, JpxTdnetDisclosureFetcher
 from app.repositories.disclosure_repository import DisclosureCreateInput, DisclosureRepository
+from app.models.company import Company
 from app.db import Base
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -341,3 +342,54 @@ def test_bulk_upsert_skips_same_batch_composite_duplicates() -> None:
 
     assert result["inserted"] == 1
     assert result["skipped"] == 1
+
+
+def test_bulk_upsert_refreshes_unknown_company_name_from_payload() -> None:
+    session = _build_session()
+    company = Company(code="1111", name="Unknown 1111", is_active=False)
+    session.add(company)
+    session.commit()
+
+    repository = DisclosureRepository(session)
+    result = repository.bulk_upsert([
+        DisclosureCreateInput(
+            company_code="1111",
+            company_name="日本システム技術",
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-16T15:00:00+09:00"),
+            title="決算短信",
+            source_url="https://www.release.tdnet.info/inbs/140120260316582566.pdf",
+            source_disclosure_id="https://www.release.tdnet.info/inbs/140120260316582566.pdf",
+        )
+    ])
+    session.commit()
+    refreshed = session.query(Company).filter_by(code="1111").one()
+
+    assert result["inserted"] == 1
+    assert refreshed.name == "日本システム技術"
+    assert refreshed.name_ja == "日本システム技術"
+
+
+def test_bulk_upsert_refreshes_mojibake_company_name_from_payload() -> None:
+    session = _build_session()
+    company = Company(code="4323", name="æ¥æ¬ã·ã¹ãã æè¡", name_ja="æ¥æ¬ã·ã¹ãã æè¡", is_active=False)
+    session.add(company)
+    session.commit()
+
+    repository = DisclosureRepository(session)
+    repository.bulk_upsert([
+        DisclosureCreateInput(
+            company_code="4323",
+            company_name="日本システム技術",
+            source_name="jpx-tdnet",
+            disclosed_at=datetime.fromisoformat("2026-03-16T15:00:00+09:00"),
+            title="決算短信",
+            source_url="https://www.release.tdnet.info/inbs/140120260316582566.pdf",
+            source_disclosure_id="https://www.release.tdnet.info/inbs/140120260316582566.pdf",
+        )
+    ])
+    session.commit()
+    refreshed = session.query(Company).filter_by(code="4323").one()
+
+    assert refreshed.name == "日本システム技術"
+    assert refreshed.name_ja == "日本システム技術"

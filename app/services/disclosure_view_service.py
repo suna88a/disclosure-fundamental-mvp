@@ -30,6 +30,9 @@ from app.models.enums import (
 )
 from app.models.job_run import JobRun
 from app.models.notification import Notification
+from app.services.investment_input_service import InvestmentMetricInputs, get_disclosure_investment_metric_inputs
+from app.services.reference_price import ReferencePrice, resolve_reference_price
+from app.services.valuation_metrics_service import ValuationMetrics, build_valuation_metrics
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,13 @@ class NotificationListItem:
     summary: str
     detail_url: str
 
+
+
+
+@dataclass(frozen=True)
+class DisclosureValuationSnapshot:
+    inputs: InvestmentMetricInputs
+    metrics: ValuationMetrics
 
 @dataclass(frozen=True)
 class JobStatusItem:
@@ -111,6 +121,24 @@ def get_disclosure_detail(session: Session, disclosure_id: int) -> Disclosure | 
     )
     return session.scalar(statement)
 
+
+def get_disclosure_reference_price(session: Session, disclosure: Disclosure) -> ReferencePrice | None:
+    company = disclosure.company
+    if company is None or not company.code:
+        return None
+    return resolve_reference_price(session, company.code, disclosure.disclosed_at)
+
+
+
+def get_disclosure_valuation_snapshot(
+    session: Session, disclosure: Disclosure
+) -> DisclosureValuationSnapshot | None:
+    company = disclosure.company
+    if company is None or not company.code:
+        return None
+    inputs = get_disclosure_investment_metric_inputs(session, disclosure)
+    metrics = build_valuation_metrics(inputs)
+    return DisclosureValuationSnapshot(inputs=inputs, metrics=metrics)
 
 def list_notifications(session: Session, limit: int = 100) -> list[NotificationListItem]:
     statement = (
@@ -340,6 +368,41 @@ def format_text(value: str | None, missing: str = "未解析") -> str:
     if value is None or not value.strip():
         return missing
     return value
+
+
+
+def eps_basis_label(value: str | None) -> str:
+    mapping = {
+        "forecast": "会社予想EPS",
+        "actual": "実績EPS",
+        "unknown": "未取得",
+    }
+    return mapping.get(value, "未取得")
+
+
+def annual_dps_source_label(value: str | None) -> str:
+    mapping = {
+        "annual_dividend_after": "年間配当修正後",
+        "interim_plus_year_end": "中間+期末合算",
+        "partial": "配当情報が一部のみ",
+        "missing": "未取得",
+    }
+    return mapping.get(value, "未取得")
+
+
+def valuation_warning_label(value: str) -> str:
+    mapping = {
+        "reference_price_missing": "参照価格未取得",
+        "eps_missing": "EPS未取得",
+        "annual_dps_missing": "年間配当未取得",
+        "eps_basis_actual": "PERは実績EPSベース",
+        "annual_dps_partial": "年間配当は一部情報から推定",
+        "company_code_missing": "銘柄コード未設定",
+        "financial_report_ambiguous": "財務入力の解釈に注意",
+        "eps_non_positive": "EPSが0以下のためPER未計算",
+        "reference_close_non_positive": "参照価格が0以下",
+    }
+    return mapping.get(value, value)
 
 
 def format_datetime(value: datetime | None) -> str:

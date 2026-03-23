@@ -7,16 +7,20 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_session
 from app.services.disclosure_view_service import (
+    annual_dps_source_label,
     category_label,
     company_display_name,
     comparison_label,
     cumulative_type_label,
     download_status_label,
+    eps_basis_label,
     format_datetime,
     format_decimal,
     format_score,
     format_text,
     get_disclosure_detail,
+    get_disclosure_reference_price,
+    get_disclosure_valuation_snapshot,
     job_status_label,
     list_recent_disclosures,
     list_job_statuses,
@@ -29,6 +33,7 @@ from app.services.disclosure_view_service import (
     revision_direction_label,
     statement_scope_label,
     tone_label,
+    valuation_warning_label,
     yes_no_label,
 )
 
@@ -68,6 +73,8 @@ def disclosure_detail(
     disclosure = get_disclosure_detail(session, disclosure_id)
     if disclosure is None:
         raise HTTPException(status_code=404, detail="Disclosure not found")
+    reference_price = get_disclosure_reference_price(session, disclosure)
+    valuation_snapshot = get_disclosure_valuation_snapshot(session, disclosure)
 
     return templates.TemplateResponse(
         request,
@@ -75,12 +82,16 @@ def disclosure_detail(
         {
             "request": request,
             "disclosure": disclosure,
+            "reference_price": reference_price,
+            "valuation_snapshot": valuation_snapshot,
+            "annual_dps_source_label": annual_dps_source_label,
             "category_label": category_label,
             "company_display_name": company_display_name,
             "comparison_label": comparison_label,
             "cumulative_type_label": cumulative_type_label,
             "priority_label": priority_label,
             "download_status_label": download_status_label,
+            "eps_basis_label": eps_basis_label,
             "parse_status_label": parse_status_label,
             "notification_status_label": notification_status_label,
             "format_decimal": format_decimal,
@@ -92,6 +103,7 @@ def disclosure_detail(
             "revision_direction_label": revision_direction_label,
             "statement_scope_label": statement_scope_label,
             "tone_label": tone_label,
+            "valuation_warning_label": valuation_warning_label,
             "yes_no_label": yes_no_label,
         },
     )

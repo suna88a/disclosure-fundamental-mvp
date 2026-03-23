@@ -54,6 +54,8 @@ def test_reset_disclosures_for_date_counts_without_deleting() -> None:
     result = reset_disclosures_for_date(session, date(2026, 3, 18), apply=False)
 
     assert result["disclosures"] == 1
+    assert result["companies"] == 1
+    assert result["companies"] == 1
     assert result["notifications"] == 1
     assert result["pdf_files"] == 1
     assert result["dividend_revisions"] == 1

@@ -10,6 +10,9 @@ from app.models.analysis_result import AnalysisResult
 from app.models.company import Company
 from app.models.daily_digest_notification import DailyDigestNotification
 from app.models.disclosure import Disclosure
+from app.models.dividend_revision import DividendRevision
+from app.models.financial_report import FinancialReport
+from app.models.price_daily import PriceDaily
 from app.models.enums import (
     ComparisonErrorReason,
     ComparisonStatus,
@@ -865,3 +868,468 @@ def test_dispatch_daily_raw_digest_jst_boundaries(monkeypatch) -> None:
     assert "https://example.com/digest/b1" in combined
     assert "https://example.com/digest/b2" in combined
     assert "https://example.com/digest/b3" not in combined
+
+
+def test_dispatch_notifications_feature_flag_off_keeps_existing_body(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    monkeypatch.setenv("ANALYSIS_ALERT_ENABLE_VALUATION_LINES", "false")
+    monkeypatch.setenv("ANALYSIS_ALERT_VALUATION_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    sent_bodies: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_bodies.append(body)
+        return NotificationSendResult(external_message_id="body-off")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7203", name="Toyota", name_ja="トヨタ自動車")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.GUIDANCE_REVISION,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    session.add(
+        AnalysisResult(
+            disclosure_id=disclosure.id,
+            auto_summary="通期見通しを更新",
+            overall_score=Decimal("3.0"),
+            should_notify=True,
+            guidance_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+            dividend_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+            yoy_comparison_status=ComparisonStatus.OK,
+            yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+        )
+    )
+    session.add(
+        FinancialReport(
+            disclosure_id=disclosure.id,
+            company_forecast_eps=Decimal("120.0"),
+        )
+    )
+    session.add(
+        PriceDaily(
+            code="7203",
+            trade_date=date(2026, 3, 12),
+            close=Decimal("2400"),
+            source="yfinance",
+            source_symbol="7203.T",
+        )
+    )
+    session.commit()
+
+    result = dispatch_notifications(session)
+
+    assert result["sent"] == 1
+    assert "PER(会社予想EPS):" not in sent_bodies[0]
+    assert "配当利回り:" not in sent_bodies[0]
+
+
+def test_dispatch_notifications_feature_flag_on_adds_per_for_guidance_revision(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    monkeypatch.setenv("ANALYSIS_ALERT_ENABLE_VALUATION_LINES", "true")
+    monkeypatch.setenv("ANALYSIS_ALERT_VALUATION_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    sent_bodies: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_bodies.append(body)
+        return NotificationSendResult(external_message_id="body-per")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7203", name="Toyota", name_ja="トヨタ自動車")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.GUIDANCE_REVISION,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    session.add(
+        AnalysisResult(
+            disclosure_id=disclosure.id,
+            auto_summary="通期見通しを更新",
+            overall_score=Decimal("3.0"),
+            should_notify=True,
+            guidance_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+            dividend_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+            yoy_comparison_status=ComparisonStatus.OK,
+            yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+        )
+    )
+    session.add(
+        FinancialReport(
+            disclosure_id=disclosure.id,
+            company_forecast_eps=Decimal("120.0"),
+        )
+    )
+    session.add(
+        PriceDaily(
+            code="7203",
+            trade_date=date(2026, 3, 12),
+            close=Decimal("2400"),
+            source="yfinance",
+            source_symbol="7203.T",
+        )
+    )
+    session.commit()
+
+    result = dispatch_notifications(session)
+
+    assert result["sent"] == 1
+    assert "PER(会社予想EPS): 20.0" in sent_bodies[0]
+
+
+def test_dispatch_notifications_feature_flag_on_adds_dividend_yield_for_dividend_revision(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    monkeypatch.setenv("ANALYSIS_ALERT_ENABLE_VALUATION_LINES", "true")
+    monkeypatch.setenv("ANALYSIS_ALERT_VALUATION_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    sent_bodies: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_bodies.append(body)
+        return NotificationSendResult(external_message_id="body-yield")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="9432", name="NTT", name_ja="日本電信電話")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="配当予想の修正に関するお知らせ",
+        category=DisclosureCategory.DIVIDEND_REVISION,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    session.add(
+        AnalysisResult(
+            disclosure_id=disclosure.id,
+            auto_summary="配当方針を更新",
+            overall_score=Decimal("2.0"),
+            should_notify=True,
+            guidance_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+            dividend_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+            yoy_comparison_status=ComparisonStatus.OK,
+            yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+        )
+    )
+    session.add(
+        DividendRevision(
+            disclosure_id=disclosure.id,
+            annual_dividend_after=Decimal("60.0"),
+        )
+    )
+    session.add(
+        PriceDaily(
+            code="9432",
+            trade_date=date(2026, 3, 12),
+            close=Decimal("3000"),
+            source="yfinance",
+            source_symbol="9432.T",
+        )
+    )
+    session.commit()
+
+    result = dispatch_notifications(session)
+
+    assert result["sent"] == 1
+    assert "配当利回り: 2.0%" in sent_bodies[0]
+
+
+def test_dispatch_notifications_feature_flag_on_keeps_existing_body_when_no_valuation_lines(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    monkeypatch.setenv("ANALYSIS_ALERT_ENABLE_VALUATION_LINES", "true")
+    monkeypatch.setenv("ANALYSIS_ALERT_VALUATION_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    sent_bodies: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_bodies.append(body)
+        return NotificationSendResult(external_message_id="body-none")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7203", name="Toyota", name_ja="トヨタ自動車")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.GUIDANCE_REVISION,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    session.add(
+        AnalysisResult(
+            disclosure_id=disclosure.id,
+            auto_summary="通期見通しを更新",
+            overall_score=Decimal("3.0"),
+            should_notify=True,
+            guidance_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+            dividend_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+            yoy_comparison_status=ComparisonStatus.OK,
+            yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+        )
+    )
+    session.commit()
+
+    result = dispatch_notifications(session)
+
+    assert result["sent"] == 1
+    assert "PER(会社予想EPS):" not in sent_bodies[0]
+    assert "配当利回り:" not in sent_bodies[0]
+
+
+def test_dispatch_notifications_feature_flag_on_suppresses_per_for_actual_eps_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    monkeypatch.setenv("ANALYSIS_ALERT_ENABLE_VALUATION_LINES", "true")
+    monkeypatch.setenv("ANALYSIS_ALERT_VALUATION_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    sent_bodies: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_bodies.append(body)
+        return NotificationSendResult(external_message_id="body-actual")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7203", name="Toyota", name_ja="トヨタ自動車")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.GUIDANCE_REVISION,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    session.add(
+        AnalysisResult(
+            disclosure_id=disclosure.id,
+            auto_summary="通期見通しを更新",
+            overall_score=Decimal("3.0"),
+            should_notify=True,
+            guidance_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+            dividend_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+            yoy_comparison_status=ComparisonStatus.OK,
+            yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+        )
+    )
+    session.add(
+        FinancialReport(
+            disclosure_id=disclosure.id,
+            eps=Decimal("100.0"),
+        )
+    )
+    session.add(
+        PriceDaily(
+            code="7203",
+            trade_date=date(2026, 3, 12),
+            close=Decimal("2400"),
+            source="yfinance",
+            source_symbol="7203.T",
+        )
+    )
+    session.commit()
+
+    result = dispatch_notifications(session)
+
+    assert result["sent"] == 1
+    assert "PER(会社予想EPS):" not in sent_bodies[0]
+
+
+def test_dispatch_notifications_feature_flag_on_suppresses_dividend_yield_for_partial_dps(monkeypatch) -> None:
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    monkeypatch.setenv("ANALYSIS_ALERT_ENABLE_VALUATION_LINES", "true")
+    monkeypatch.setenv("ANALYSIS_ALERT_VALUATION_DRY_RUN", "false")
+    get_settings.cache_clear()
+
+    sent_bodies: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_bodies.append(body)
+        return NotificationSendResult(external_message_id="body-partial")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="9432", name="NTT", name_ja="日本電信電話")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="配当予想の修正に関するお知らせ",
+        category=DisclosureCategory.DIVIDEND_REVISION,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    session.add(
+        AnalysisResult(
+            disclosure_id=disclosure.id,
+            auto_summary="配当方針を更新",
+            overall_score=Decimal("2.0"),
+            should_notify=True,
+            guidance_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+            dividend_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+            yoy_comparison_status=ComparisonStatus.OK,
+            yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+        )
+    )
+    session.add(
+        DividendRevision(
+            disclosure_id=disclosure.id,
+            year_end_dividend_after=Decimal("35.0"),
+        )
+    )
+    session.add(
+        PriceDaily(
+            code="9432",
+            trade_date=date(2026, 3, 12),
+            close=Decimal("3000"),
+            source="yfinance",
+            source_symbol="9432.T",
+        )
+    )
+    session.commit()
+
+    result = dispatch_notifications(session)
+
+    assert result["sent"] == 1
+    assert "配当利回り:" not in sent_bodies[0]
+
+
+def test_dispatch_notifications_feature_flag_dry_run_logs_preview_without_appending(monkeypatch, caplog) -> None:
+    caplog.set_level("INFO")
+    monkeypatch.setenv("NOTIFICATION_CHANNEL", "dummy")
+    monkeypatch.setenv("NOTIFICATION_DESTINATION", "test-room")
+    monkeypatch.setenv("WEB_BASE_URL", "https://example.com/app")
+    monkeypatch.setenv("ANALYSIS_ALERT_ENABLE_VALUATION_LINES", "true")
+    monkeypatch.setenv("ANALYSIS_ALERT_VALUATION_DRY_RUN", "true")
+    get_settings.cache_clear()
+
+    sent_bodies: list[str] = []
+
+    def fake_send(self, destination: str, body: str) -> NotificationSendResult:
+        sent_bodies.append(body)
+        return NotificationSendResult(external_message_id="body-dry-run")
+
+    monkeypatch.setattr("app.services.notification_dispatch.DummyNotifier.send", fake_send)
+
+    session = _build_session()
+    company = Company(code="7203", name="Toyota", name_ja="トヨタ自動車")
+    session.add(company)
+    session.flush()
+    disclosure = Disclosure(
+        company_id=company.id,
+        source_name="dummy",
+        disclosed_at=datetime.fromisoformat("2026-03-13T15:00:00+09:00"),
+        title="業績予想の修正に関するお知らせ",
+        category=DisclosureCategory.GUIDANCE_REVISION,
+        priority=DisclosurePriority.CRITICAL,
+        source_url="https://example.com/disclosure",
+        is_new=True,
+        is_analysis_target=True,
+    )
+    session.add(disclosure)
+    session.flush()
+    session.add(
+        AnalysisResult(
+            disclosure_id=disclosure.id,
+            auto_summary="通期見通しを更新",
+            overall_score=Decimal("3.0"),
+            should_notify=True,
+            guidance_revision_status=RevisionDetectionStatus.REVISION_DETECTED_UP,
+            dividend_revision_status=RevisionDetectionStatus.NO_REVISION_DETECTED,
+            yoy_comparison_status=ComparisonStatus.OK,
+            yoy_comparison_error_reason=ComparisonErrorReason.NONE,
+        )
+    )
+    session.add(
+        FinancialReport(
+            disclosure_id=disclosure.id,
+            company_forecast_eps=Decimal("120.0"),
+        )
+    )
+    session.add(
+        PriceDaily(
+            code="7203",
+            trade_date=date(2026, 3, 12),
+            close=Decimal("2400"),
+            source="yfinance",
+            source_symbol="7203.T",
+        )
+    )
+    session.commit()
+
+    result = dispatch_notifications(session)
+
+    assert result["sent"] == 1
+    assert "PER(会社予想EPS):" not in sent_bodies[0]
+    assert "analysis_alert_valuation_dry_run" in caplog.text

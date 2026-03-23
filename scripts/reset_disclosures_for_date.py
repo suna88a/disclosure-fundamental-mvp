@@ -40,6 +40,7 @@ def reset_disclosures_for_date(session: Session, target_date: date, *, apply: bo
     result: dict[str, int | str] = {
         "target_date": target_date.isoformat(),
         "disclosures": len(disclosure_ids),
+        "companies": 0,
         "notifications": 0,
         "pdf_files": 0,
         "financial_reports": 0,
@@ -51,6 +52,13 @@ def reset_disclosures_for_date(session: Session, target_date: date, *, apply: bo
     }
     if not disclosure_ids:
         return result
+
+    company_ids = list(
+        session.scalars(
+            select(Disclosure.company_id).where(Disclosure.id.in_(disclosure_ids)).distinct()
+        )
+    )
+    result["companies"] = len(company_ids)
 
     result["notifications"] = _count_rows(session, Notification, disclosure_ids)
     result["pdf_files"] = _count_rows(session, PdfFile, disclosure_ids)
@@ -88,6 +96,7 @@ def main() -> None:
     print(result)
     if not args.apply:
         print("Dry run only. Re-run with --apply to delete rows for this disclosure date.")
+        print("Company rows are kept. Re-fetching the day refreshes Unknown/mojibake company names when TDnet provides a valid company name.")
 
 
 if __name__ == "__main__":

@@ -1364,3 +1364,304 @@ python -m scripts.repair_notification_enum_values --apply
 This rewrites legacy `notifications.notification_type`, `channel`, and `status` values to their lowercase enum `.value` form.
 
 
+
+## Daily Price Foundation
+
+A free-source daily price foundation is available for future valuation metrics such as PER and dividend yield.
+
+Added components:
+
+- model: `price_daily`
+- repository: `PriceDailyRepository`
+- free fetch adapter: `YFinancePriceFetcher`
+- loader script: `scripts.run_price_loader`
+- reference resolver: `app.services.reference_price.resolve_reference_price`
+- non-destructive table creation script: `scripts.create_price_daily_table`
+
+Purpose in this phase:
+
+- save daily OHLCV prices
+- resolve a reference close before a disclosure date
+- keep notifications and disclosure processing independent from live price API calls
+
+Environment and dependency note:
+
+- the first free adapter uses `yfinance`
+- live loading depends on Yahoo Finance availability and may return no rows on holidays, suspended names, or source-side issues
+- notification jobs must only read already saved price data; they should not call external price APIs directly
+
+Create the table safely on an existing DB:
+
+```powershell
+python -m scripts.create_price_daily_table
+```
+
+Load one code for one date:
+
+```powershell
+python -m scripts.run_price_loader --code 7203 --date 2026-03-19
+```
+
+Load one code for a range:
+
+```powershell
+python -m scripts.run_price_loader --code 7203 --start-date 2026-03-17 --end-date 2026-03-21
+```
+
+Load all active companies for one date:
+
+```powershell
+python -m scripts.run_price_loader --date 2026-03-19
+```
+
+Dry run:
+
+```powershell
+python -m scripts.run_price_loader --code 7203 --date 2026-03-19 --dry-run
+```
+
+Force update existing rows:
+
+```powershell
+python -m scripts.run_price_loader --code 7203 --date 2026-03-19 --force
+```
+
+Reference price rule:
+
+- `resolve_reference_price(code, disclosure_date)` returns the latest saved `close` for the most recent `trade_date` strictly before `disclosure_date`
+- if no prior price exists, it returns `None`
+
+This is the connection point for future:
+
+- PER calculations using saved EPS and reference price
+- dividend yield calculations using saved dividend information and reference price
+
+Additional maintenance helper for existing databases:
+
+```powershell
+python -m scripts.create_job_runs_result_summary_json_column
+```
+
+Use this only when an older SQLite DB already has `job_runs` but predates the `result_summary_json` column. The script is non-destructive and only adds the missing column when needed.
+
+Reference price contract:
+
+- `resolve_reference_price(session, code, disclosure_date)` returns `ReferencePrice | None`
+- `ReferencePrice` always includes:
+  - `code`
+  - `reference_trade_date`
+  - `close`
+  - `source`
+  - `source_symbol`
+- the resolver always returns the latest saved `close` for a `trade_date` strictly earlier than `disclosure_date`
+- same-day prices are not used as the reference price
+- rows with `close=None` are skipped and the resolver falls back to an older saved price if available
+
+Disclosure detail now has a read-only connection to the saved daily price foundation.
+
+When a matching company code exists and past price data has been loaded, `/disclosures/{id}` can show:
+
+- reference trade date
+- reference close
+- reference price source
+- reference price symbol
+
+The rule is unchanged from `resolve_reference_price(...)`:
+
+- use the latest saved `trade_date` strictly earlier than `disclosure.disclosed_at`
+- do not use same-day price rows
+- if no saved prior price exists, the detail page shows no reference price
+
+This is a read-only display hook only. Notifications, raw digests, daily digests, and the main `should_notify` path do not use live price fetches.
+
+
+Investment metric inputs are also available as a reusable read-only service.
+
+- `app/services/investment_input_service.py`
+- `get_disclosure_investment_metric_inputs(session, disclosure)` aggregates:
+  - reference close
+  - reference trade date
+  - reference price source
+  - reference price symbol
+  - EPS
+  - annual DPS
+- values come from saved `price_daily`, `financial_reports`, and `dividend_revisions`
+- missing inputs are returned as `None`
+
+
+Valuation metric calculations are available as a separate read-only service.
+
+- `app/services/valuation_metrics_service.py`
+- `build_valuation_metrics(inputs)` calculates:
+  - forward PER = `reference_close / EPS`
+  - dividend yield = `annual_dps / reference_close`
+- calculation rules:
+  - if `EPS` is missing or `<= 0`, forward PER is `None`
+  - if `annual_dps` or `reference_close` is missing, dividend yield is `None`
+- the service returns calculation results, input availability flags, and warnings
+- notifications, pipeline, raw digests, daily digests, and the main `should_notify` path remain unchanged
+
+
+Disclosure detail can also show valuation metric outputs in read-only form.
+
+- forward PER
+- dividend yield
+- EPS source
+- annual DPS source
+- warnings
+
+These values come from `investment_input_service` and `valuation_metrics_service` and are only for manual verification at this stage. Notifications and pipeline behavior remain unchanged.
+
+
+Valuation interpretation is fixed before notification use.
+
+- `InvestmentMetricInputs` now exposes:
+  - `eps_basis`: `forecast` / `actual` / `unknown`
+  - `annual_dps_source`: `annual_dividend_after` / `interim_plus_year_end` / `partial` / `missing`
+  - warning codes for interpretation caveats
+- `ValuationMetrics` keeps `forward_per`, but it is explicitly interpreted as `reference_close / EPS`
+- when `eps_basis=actual`, the warning `eps_basis_actual` is included so the number is not confused with a strict forward PER
+- these rules are read-only and do not affect notifications or pipeline behavior
+
+
+A notification-facing read-only interpretation layer is also available.
+
+- `app/services/valuation_notification_service.py`
+- `build_valuation_notification_presentation(inputs, metrics)` decides:
+  - whether PER should be shown
+  - whether dividend yield should be shown
+  - which labels to use
+  - which reasons caused suppression
+- current rules:
+  - PER is shown only when a calculable PER exists and `eps_basis=forecast`
+  - actual EPS fallback suppresses PER for notification use
+  - dividend yield is shown only when a calculable yield exists and `annual_dps_source` is not `partial`
+- this layer is read-only and does not change notification sending behavior yet
+
+
+A notification text assembly layer is also available before actual delivery is connected.
+
+- `app/services/valuation_notification_text_service.py`
+- `build_valuation_notification_text(...)` returns:
+  - `headline`
+  - `body_lines`
+  - `shown_fields`
+  - `omitted_fields`
+- it uses the notification presentation decision layer and only includes PER / dividend yield lines when they are allowed to be shown
+- suppressed reasons stay internal and are not injected into the assembled body text
+
+
+A thin bridge into notification-style payloads is also available without changing actual delivery.
+
+- `app/services/valuation_notification_payload_service.py`
+- `build_valuation_notification_draft_payload(...)` returns:
+  - `title`
+  - `body`
+  - `metadata`
+- the title follows `[開示カテゴリ] コード 会社名`
+- the body only includes valuation lines that passed the presentation layer checks
+- this is intended for dry-run and internal inspection before wiring into real notification sending
+
+
+## Analysis Alert Valuation Overlay
+
+A limited bridge is available for main analysis alerts only.
+
+- `ANALYSIS_ALERT_ENABLE_VALUATION_LINES=false` keeps the existing main notification body unchanged.
+- `ANALYSIS_ALERT_ENABLE_VALUATION_LINES=true` allows valuation lines to be appended for `guidance_revision` and `dividend_revision` only.
+- `ANALYSIS_ALERT_VALUATION_DRY_RUN=true` logs the valuation draft metadata but does not append valuation lines to the sent body.
+
+The overlay only appends valuation lines when the presentation layer allows them, so missing or suppressed valuation fields fall back to the existing notification body unchanged. Raw notifications and daily digest are unaffected.
+## Analysis Alert Revision Bodies
+
+A limited body override is available for main analysis alerts for guidance and dividend revisions.
+
+- valuation is auxiliary information only; the primary purpose is to send a clearer guidance-revision or dividend-revision summary
+- `ANALYSIS_ALERT_ENABLE_REVISION_BODIES=false` keeps the existing main notification body unchanged
+- `ANALYSIS_ALERT_ENABLE_REVISION_BODIES=true` enables revision-specific bodies only for `guidance_revision` and `dividend_revision`
+- `ANALYSIS_ALERT_REVISION_BODY_DRY_RUN=true` logs preview data but still sends the existing body unchanged
+- when enabled and not in dry-run, guidance revision notifications can show before/after values for sales, operating income, ordinary income, net income, and EPS when available
+- when enabled and not in dry-run, dividend revision notifications can show before/after values for interim, year-end, and annual dividend when available
+- valuation remains a trailing helper line only when allowed by the valuation presentation rules
+  - forecast EPS can add `PER(会社予想EPS)`
+  - actual EPS fallback does not add PER
+  - annual dividend partial input does not add dividend yield
+- categories outside `guidance_revision` and `dividend_revision` still use the existing alert body
+- raw notifications and daily digest are unaffected
+
+Local dry-run confirmation:
+
+```powershell
+$env:DATABASE_URL="sqlite:///./data/app_smoke.db"
+$env:ANALYSIS_ALERT_ENABLE_REVISION_BODIES="true"
+$env:ANALYSIS_ALERT_REVISION_BODY_DRY_RUN="true"
+$env:NOTIFICATION_CHANNEL="dummy"
+$env:NOTIFICATION_DESTINATION="local-test"
+$env:WEB_BASE_URL="https://example.com/app"
+python -m scripts.run_notifications
+```
+
+Feature-on confirmation:
+
+```powershell
+$env:DATABASE_URL="sqlite:///./data/app_smoke.db"
+$env:ANALYSIS_ALERT_ENABLE_REVISION_BODIES="true"
+$env:ANALYSIS_ALERT_REVISION_BODY_DRY_RUN="false"
+$env:NOTIFICATION_CHANNEL="dummy"
+$env:NOTIFICATION_DESTINATION="local-test"
+$env:WEB_BASE_URL="https://example.com/app"
+python -m scripts.run_notifications
+```
+
+At this stage, earnings-report notification body unification is still not implemented.
+
+## Fresh Smoke DB For Valuation Notifications
+
+If your existing `data/app.db` is older than the current schema, do not reuse it for local valuation notification checks. Create a fresh SQLite file instead.
+
+Example with a new smoke DB:
+
+```powershell
+$env:DATABASE_URL="sqlite:///./data/app_smoke.db"
+python -m scripts.init_smoke_db
+python -m scripts.seed_smoke_notifications
+```
+
+This inserts fixed smoke-only data for local notification checks:
+- one `guidance_revision` with forecast EPS and reference price
+- one `dividend_revision` with annual DPS and reference price
+- one `guidance_revision` with actual EPS fallback
+- one `dividend_revision` with partial DPS
+
+These values are dummy inputs for local verification only. They are not market data.
+
+Dry-run style local confirmation:
+
+```powershell
+$env:DATABASE_URL="sqlite:///./data/app_smoke.db"
+$env:ANALYSIS_ALERT_ENABLE_VALUATION_LINES="true"
+$env:ANALYSIS_ALERT_VALUATION_DRY_RUN="true"
+$env:NOTIFICATION_CHANNEL="dummy"
+$env:NOTIFICATION_DESTINATION="local-test"
+$env:WEB_BASE_URL="https://example.com/app"
+python -m scripts.run_notifications
+```
+
+Feature-on confirmation:
+
+```powershell
+$env:DATABASE_URL="sqlite:///./data/app_smoke.db"
+$env:ANALYSIS_ALERT_ENABLE_VALUATION_LINES="true"
+$env:ANALYSIS_ALERT_VALUATION_DRY_RUN="false"
+$env:NOTIFICATION_CHANNEL="dummy"
+$env:NOTIFICATION_DESTINATION="local-test"
+$env:WEB_BASE_URL="https://example.com/app"
+python -m scripts.run_notifications
+```
+
+Expected smoke behavior:
+- `guidance_revision` with forecast EPS shows `PER(会社予想EPS)`
+- `dividend_revision` with annual DPS shows `配当利回り`
+- actual EPS fallback does not show PER
+- partial DPS does not show dividend yield
+

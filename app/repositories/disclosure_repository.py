@@ -1,6 +1,8 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+import re
+import unicodedata
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,16 +39,51 @@ class DisclosureRepository:
     def ensure_company_for_disclosure(self, payload: DisclosureCreateInput) -> tuple[Company, bool]:
         company = self.find_company_by_code(payload.company_code)
         if company is not None:
+            self._refresh_company_names(company, payload.company_name)
             return company, False
 
+        company_name = (payload.company_name or f"Unknown {payload.company_code}").strip()
         company = Company(
             code=payload.company_code,
-            name=payload.company_name or f"Unknown {payload.company_code}",
+            name=company_name,
+            name_ja=company_name if payload.company_name else None,
             is_active=False,
         )
         self.session.add(company)
         self.session.flush()
         return company, True
+
+    def _refresh_company_names(self, company: Company, company_name: str | None) -> None:
+        normalized_name = (company_name or "").strip()
+        if not normalized_name:
+            return
+
+        if self._should_refresh_name(company.name):
+            company.name = normalized_name
+
+        if not company.name_ja or self._should_refresh_name(company.name_ja):
+            company.name_ja = normalized_name
+
+    @staticmethod
+    def _should_refresh_name(current_name: str | None) -> bool:
+        if current_name is None:
+            return True
+        text = current_name.strip()
+        if not text:
+            return True
+        if text.startswith("Unknown "):
+            return True
+        return DisclosureRepository._looks_mojibake(text)
+
+    @staticmethod
+    def _looks_mojibake(value: str) -> bool:
+        normalized = unicodedata.normalize("NFKC", value)
+        if "�" in normalized:
+            return True
+        latin_supplement = sum(1 for char in normalized if 0x00C0 <= ord(char) <= 0x024F)
+        suspicious_markers = len(re.findall(r"[ÃÂÆÐÑØÞßæðøþŒœŠšŸž¢£¤¥¦§¨©«¬®¯°±²³´µ¶·¸»¼½¾]", normalized))
+        has_japanese = any("ぁ" <= char <= "ゖ" or "ァ" <= char <= "ヿ" or "一" <= char <= "龯" for char in normalized)
+        return not has_japanese and (suspicious_markers >= 1 or latin_supplement >= 3)
 
     def find_existing(self, payload: DisclosureCreateInput, company_id: int) -> Disclosure | None:
         if payload.source_disclosure_id:

@@ -14,6 +14,10 @@ class CompanyRepository:
         statement = select(Company).where(Company.code == code)
         return self.session.scalar(statement)
 
+    def list_active_codes(self) -> list[str]:
+        statement = select(Company.code).where(Company.is_active.is_(True)).order_by(Company.code.asc())
+        return [str(code) for code in self.session.scalars(statement)]
+
     def bulk_upsert(self, companies: Sequence[dict[str, str | bool | None]]) -> dict[str, int]:
         inserted = 0
         updated = 0
