@@ -1,5 +1,4 @@
 import argparse
-import os
 from datetime import date
 
 from app.fetchers.disclosure_fetcher import (
@@ -8,11 +7,17 @@ from app.fetchers.disclosure_fetcher import (
     HttpJsonDisclosureFetcher,
     JpxTdnetDisclosureFetcher,
 )
+from app.config import get_settings
 from app.jobs.runner import run_job
 from app.services.disclosure_ingestion import ingest_disclosures
 
 
-DEFAULT_SOURCE = "jpx-tdnet" if os.getenv("JPX_DISCLOSURE_URL_TEMPLATE") else ("http-json" if os.getenv("DISCLOSURE_SOURCE_URL") else "dummy")
+def _default_source(settings) -> str:
+    if settings.jpx_disclosure_url_template:
+        return "jpx-tdnet"
+    if settings.disclosure_source_url:
+        return "http-json"
+    return "dummy"
 
 
 
@@ -22,11 +27,12 @@ def _parse_date(value: str) -> date:
 
 
 def parse_args() -> argparse.Namespace:
+    settings = get_settings()
     parser = argparse.ArgumentParser(description="Fetch and persist disclosures.")
-    parser.add_argument("--source", default=DEFAULT_SOURCE, choices=["dummy", "http-json", "jpx-tdnet"], help="Disclosure source backend.")
+    parser.add_argument("--source", default=_default_source(settings), choices=["dummy", "http-json", "jpx-tdnet"], help="Disclosure source backend.")
     parser.add_argument("--input", default="data/samples/disclosures_sample.json", help="Input file path for the dummy source.")
-    parser.add_argument("--url", default=os.getenv("DISCLOSURE_SOURCE_URL", ""), help="HTTP JSON disclosure feed URL for the http-json source.")
-    parser.add_argument("--url-template", default=os.getenv("JPX_DISCLOSURE_URL_TEMPLATE", ""), help="JPX TDnet list URL template. Supports {date} (YYYY-MM-DD), {date_yyyymmdd} (YYYYMMDD), and optional {page}.")
+    parser.add_argument("--url", default=settings.disclosure_source_url or "", help="HTTP JSON disclosure feed URL for the http-json source.")
+    parser.add_argument("--url-template", default=settings.jpx_disclosure_url_template or "", help="JPX TDnet list URL template. Supports {date} (YYYY-MM-DD), {date_yyyymmdd} (YYYYMMDD), and optional {page}.")
     parser.add_argument("--date", dest="target_date", type=_parse_date, help="Target date in YYYY-MM-DD format. Defaults to today in JST.")
     parser.add_argument("--date-from", type=_parse_date, help="Range start date in YYYY-MM-DD format.")
     parser.add_argument("--date-to", type=_parse_date, help="Range end date in YYYY-MM-DD format.")

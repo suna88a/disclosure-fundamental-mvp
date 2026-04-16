@@ -1,10 +1,11 @@
 import argparse
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from app.config import get_settings
 
 
 @dataclass(frozen=True)
@@ -15,11 +16,17 @@ class PipelineStep:
     description: str
 
 
-DEFAULT_DISCLOSURE_SOURCE = "jpx-tdnet" if os.getenv("JPX_DISCLOSURE_URL_TEMPLATE") else ("http-json" if os.getenv("DISCLOSURE_SOURCE_URL") else "dummy")
+def _default_disclosure_source(settings) -> str:
+    if settings.jpx_disclosure_url_template:
+        return "jpx-tdnet"
+    if settings.disclosure_source_url:
+        return "http-json"
+    return "dummy"
 
 
 
 def parse_args() -> argparse.Namespace:
+    settings = get_settings()
     parser = argparse.ArgumentParser(description="Run the disclosure-driven MVP pipeline sequentially.")
     parser.add_argument(
         "--python",
@@ -28,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--disclosure-source",
-        default=DEFAULT_DISCLOSURE_SOURCE,
+        default=_default_disclosure_source(settings),
         choices=["dummy", "http-json", "jpx-tdnet"],
         help="Disclosure fetch source backend.",
     )
@@ -39,12 +46,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--disclosure-url",
-        default=os.getenv("DISCLOSURE_SOURCE_URL", ""),
+        default=settings.disclosure_source_url or "",
         help="HTTP JSON disclosure feed URL for the http-json disclosure fetcher.",
     )
     parser.add_argument(
         "--disclosure-url-template",
-        default=os.getenv("JPX_DISCLOSURE_URL_TEMPLATE", ""),
+        default=settings.jpx_disclosure_url_template or "",
         help="JPX TDnet list URL template. Supports {date} (YYYY-MM-DD), {date_yyyymmdd} (YYYYMMDD), and optional {page}.",
     )
     parser.add_argument(
