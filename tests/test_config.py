@@ -1,4 +1,4 @@
-from app.config import get_settings
+from app.config import ENV_FILE, get_settings
 
 
 
@@ -62,3 +62,8 @@ def test_settings_reads_jpx_disclosure_url_template(monkeypatch) -> None:
 
     assert settings.jpx_disclosure_url_template == "https://www.release.tdnet.info/inbs/I_list_001_{date_yyyymmdd}.html"
     assert settings.disclosure_source_url == "https://example.com/disclosures.json"
+
+
+def test_settings_uses_absolute_env_file() -> None:
+    assert ENV_FILE.is_absolute()
+    assert ENV_FILE.name == ".env"
